@@ -193,7 +193,7 @@ TBD. Packaging (container image or other) is not decided yet. Whatever it ends u
 | [ ] | 4. Query and bank sync | Constrained `/query`, `/bank-sync` | Only allowlisted tables are queryable |
 | [ ] | 5. Hardening | Bearer-token auth, schema validation on every route (TypeBox request and response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
 | [ ] | 6. Deploy (TBD) | Packaging and restart policy (approach not decided), persistent `DATA_DIR` | Survives a reboot |
-| [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync, the write queue, error translation, dates and write validation; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
+| [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync, the write lock, budget writes and syncs, error translation, dates and write validation; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
 
 ## Project layout
 
@@ -202,8 +202,9 @@ src/
   main.ts        composition root: wires the modules, runs start-up and shutdown
   config.ts      environment → validated, typed config
   lifecycle.ts   process signals and fatal errors → one graceful shutdown
-  core/          shared infrastructure: Actual connection, error translation and the
-                 write queue, Fastify app setup and error mapping, background sync
+  core/          shared infrastructure: Actual connection, error translation, budget
+                 writes and syncs behind one lock, Fastify app setup and error mapping,
+                 background sync
   features/      one folder per resource (accounts, transactions, …): its types,
                  budget access, HTTP routes and tests together
 test/support/    shared test helpers (tests sit next to the code as *.test.ts)

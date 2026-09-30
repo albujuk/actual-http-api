@@ -3,7 +3,8 @@ import * as api from "@actual-app/api";
 import { account, fakeStatus } from "../../../test/support/fixtures.js";
 import { describeLibraryCalls } from "../../../test/support/library-calls.js";
 import { ActualApiError, InvalidInputError, NotFoundError } from "../../core/actual/errors.js";
-import { BudgetWriteQueue } from "../../core/actual/write-queue.js";
+import { BudgetWrites } from "../../core/actual/budget-writes.js";
+import { SerialExecutor } from "../../core/sync/serial-executor.js";
 import type { AccountReader } from "../accounts/account-types.js";
 import type { CategoryReader } from "../categories/category-types.js";
 import type { PayeeReader } from "../payees/payee-types.js";
@@ -38,7 +39,12 @@ const categories: CategoryReader = {
 const payees: PayeeReader = { list: async () => [{ id: "p1", name: "Cafe" }] };
 
 const status = fakeStatus();
-const writer = new ApiTransactionWriter(new BudgetWriteQueue(status, () => {}), accounts, categories, payees);
+const writer = new ApiTransactionWriter(
+  new BudgetWrites(new SerialExecutor(), status, () => {}),
+  accounts,
+  categories,
+  payees,
+);
 
 const coffee = { date: "2026-09-30", amount: -450, payee: "p1", category: "c1", imported_id: "bank-1" };
 

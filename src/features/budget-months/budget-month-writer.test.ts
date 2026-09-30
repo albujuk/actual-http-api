@@ -3,7 +3,8 @@ import * as api from "@actual-app/api";
 import { fakeStatus, month } from "../../../test/support/fixtures.js";
 import { describeLibraryCalls } from "../../../test/support/library-calls.js";
 import { InvalidInputError, NotFoundError } from "../../core/actual/errors.js";
-import { BudgetWriteQueue } from "../../core/actual/write-queue.js";
+import { BudgetWrites } from "../../core/actual/budget-writes.js";
+import { SerialExecutor } from "../../core/sync/serial-executor.js";
 import type { CategoryReader } from "../categories/category-types.js";
 import { ApiBudgetAmountWriter } from "./budget-month-writer.js";
 
@@ -16,7 +17,7 @@ const categories: CategoryReader = {
 
 const status = fakeStatus();
 const writer = new ApiBudgetAmountWriter(
-  new BudgetWriteQueue(status, () => {}),
+  new BudgetWrites(new SerialExecutor(), status, () => {}),
   { months: async () => ["2026-09"], month: async () => month },
   categories,
 );

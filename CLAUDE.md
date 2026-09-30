@@ -43,8 +43,9 @@ src/
       api-errors.ts        pure translateApiError() + callApi(): library APIError objects -> typed errors
       guard.ts             requireLoaded(status): throws NotReadyError before the budget loads
       actual-connection.ts ActualConnection: init/shutdown, list budgets, load one. One per process
-      write-queue.ts       BudgetWriteQueue: WriteQueue + Syncable. Serializes writes (each followed by a sync) and
-                           periodic syncs, guarded by BudgetStatus; close() drains it and rejects new work (503)
+      budget-writes.ts     BudgetWrites: WriteQueue. Under the Exclusive lock: requireLoaded, the write, then
+                           api.sync(); a failed sync keeps the write and goes to onSyncError
+      budget-sync.ts       BudgetSync: Syncable. Under the same lock: requireLoaded, then api.sync()
       budget-selection.ts  pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
     http/
       app.ts               buildApp(modules, options): creates Fastify, error handlers, docs, then each module's plugin. Knows no concrete route
@@ -55,6 +56,9 @@ src/
       error-handler.ts     JSON { error } responses; 5xx never carry the raw message
     sync/
       periodic-sync.ts     PeriodicSync: chained setTimeout around a Syncable; implements SyncStatus
+      serial-executor.ts   SerialExecutor: Exclusive (run). FIFO, one job at a time, a failed job doesn't block
+                           the next; close() waits for queued jobs and rejects new ones (NotReadyError, 503).
+                           Knows nothing about Actual
   features/<name>/         one folder per resource: accounts, transactions, categories, payees, budget-months,
                            ids, budgets, health. Each holds what it has of:
     <name>-types.ts        the feature's data types + its narrow reader interface (AccountReader, ...)
@@ -72,7 +76,7 @@ test/support/              shared test helpers only: fixtures + fakeStatus(), te
 Conventions to keep:
 
 - **Dependency injection through `main.ts` only.** Modules receive their collaborators and never import singletons. Only `main.ts` calls `loadConfig(process.env)`.
-- **Depend on the narrowest interface.** Routes and `PeriodicSync` take `BudgetStatus`, `BudgetCatalog` or `Syncable`, never `ActualConnection`. For a new capability, add an interface in the feature's `<name>-types.ts` and implement it in a **new class** in that feature folder (like `AccountQueries`: it takes `BudgetStatus` and throws if no budget is loaded). Connection-level capabilities (like `BudgetWriteQueue`) go in `core/actual/`. Write capabilities take the `WriteQueue`, never the connection, and run all their checks and library calls inside one `queue.write()`. Do not grow `ActualConnection`, which only owns connection and budget-load state. Inject the capability into a new route factory registered in `buildApp`.
+- **Depend on the narrowest interface.** Routes and `PeriodicSync` take `BudgetStatus`, `BudgetCatalog` or `Syncable`, never `ActualConnection`. For a new capability, add an interface in the feature's `<name>-types.ts` and implement it in a **new class** in that feature folder (like `AccountQueries`: it takes `BudgetStatus` and throws if no budget is loaded). Connection-level capabilities (like `BudgetWrites` and `BudgetSync`) go in `core/actual/`; generic infrastructure with nothing Actual-specific (like `SerialExecutor`) goes in `core/sync/`. Anything that must not interleave with writes takes the shared `Exclusive` lock, never a concrete class. Write capabilities take the `WriteQueue`, never the connection, and run all their checks and library calls inside one `queue.write()`. Do not grow `ActualConnection`, which only owns connection and budget-load state. Inject the capability into a new route factory registered in `buildApp`.
 - **Import `@actual-app/api` only in `core/actual/` and in a feature's capability classes** (`*-queries.ts`, `name-resolver.ts`, `*-writer.ts`). Route files never import it. The library is a process-wide singleton, so the `ActualConnection` constructor throws on a second instance. Budget selection policy lives in the composition root, not in `core/actual/`. Keep pure logic, such as `selectBudget`, in its own side-effect-free functions.
 - **Add a resource as a new `features/<name>/` folder** with its types, capability class, `<name>-routes.ts` returning a `RouteModule`, and tests. Add the module to the `buildApp([...])` list in `main.ts` and its path and tag to the spec test in `src/app.test.ts`. Nothing in `core/` changes: `app.ts`, `docs.ts` and `schemas.ts` stay untouched. The module keeps its TypeBox schemas and its tag in its own file; only schemas used by several modules go in `schemas.ts`.
 - **Dependency direction: features import `core/`, `core/` never imports a feature.** Between features only `import type` is allowed (transactions uses `AccountReader`, `CategoryReader` and `PayeeReader`, budget-months uses `Category` and `CategoryReader`). All runtime wiring stays in `main.ts`. No `index.ts` barrels: import modules directly.
@@ -85,8 +89,8 @@ Conventions to keep:
 - Start-up order: `app.listen()` runs **before** `connection.connect()`, then `main.ts` calls `selectBudget(await connection.listBudgets(), ...)` and `connection.load(budget)`. `listBudgets()` needs only `connect()`, not a loaded budget; before that it throws `NotReadyError` (503). `/healthz` returns `503 {status:"starting"}` until the budget has loaded, then `200 {status:"ok", budget, lastSyncAt?, lastSyncError?}`. It stays 200 when syncs fail. Periodic sync starts after the budget loads. `start()` checks an `AbortSignal` between steps. Any start-up failure calls `process.exit(1)`, unless shutdown has already begun.
 - Budget selection (`selectBudget`): `ACTUAL_SYNC_ID` wins. Otherwise the bridge matches on `ACTUAL_BUDGET_NAME`. If neither is set, it auto-picks when the server has exactly one budget. Zero or several matches throw an error that lists the available budgets.
 - `listBudgets()` keeps only remote files (`state: "remote"`), deduped by `groupId`. `api.getBudgets()` also returns local cache folders, which can be stale.
-- Writes: every write route calls a writer, which runs its checks and the library call inside `BudgetWriteQueue.write()`, then `api.sync()`. The periodic sync runs through the same queue. If the sync after a write fails, the write still succeeds (it is in the local copy, the next sync sends it); the error goes to `onSyncError` (logged).
-- Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server (waits for in-flight requests), `await writes.close()` (drains the queue, new writes get 503), then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
+- Writes: every write route calls a writer, which runs its checks and the library call inside `BudgetWrites.write()`, then `api.sync()`, all under the one `SerialExecutor` lock. The periodic sync (`BudgetSync`) takes the same lock, so a sync never runs mid-write. If the sync after a write fails, the write still succeeds (it is in the local copy, the next sync sends it); the error goes to `onSyncError` (logged).
+- Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server (waits for in-flight requests), `await lock.close()` (drains the `SerialExecutor`, new writes and syncs get 503), then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
 
 Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, `GET /payees`, `GET /budget/months`, `GET /budget/:month`, `POST /budget/:month/set-amount`, `POST /accounts/:id/transactions/import`, `POST /accounts/:id/transactions/add`, `PATCH /transactions/:id`, `DELETE /transactions/:id`, `GET /id?type=&name=`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
 
@@ -109,7 +113,7 @@ Empty strings count as unset. Invalid values stop start-up with a one-line error
 ## Invariants for upcoming work (from the plan)
 
 - **Run a single bridge instance per budget.** The local SQLite copy has a single writer.
-- **Serialize writes** through `BudgetWriteQueue` (built), which `sync()`s after each write. New writes (bank sync) go through it too.
+- **Serialize writes** through `BudgetWrites` (built), which `sync()`s after each write under the shared `SerialExecutor` lock. New writes (bank sync) go through it too.
 - Money is integer minor units (expenses negative). Dates are `YYYY-MM-DD` and months are `YYYY-MM`. Use `utils.amountToInteger` rather than hand-rolled rounding.
 - Prefer `importTransactions` (it reconciles, runs rules and dedupes by `imported_id`) over `addTransactions` for user input.
 - Account-scoped routes nest under `/accounts/:id/…` (including `…/transactions/import|add`), so `/transactions/:id` always means a transaction id.
@@ -124,6 +128,7 @@ Each rule guards against a bug class found in review. Follow them in every chang
 - **Shutdown awaits all in-flight work before `connection.close()`.** That covers start-up steps, syncs and, later, writes behind the mutex. Start-up checks the abort signal between steps. Every exit goes through `lifecycle.ts` and stays bounded by the timeout. Don't call `process.exit` anywhere else, except for config and start-up failures in `main.ts`.
 - **Never send a raw `err.message` in a 5xx response.** Throw typed errors and let `core/http/error-handler.ts` map them. A capability used before the connection or budget is ready throws `NotReadyError` (503), never a plain `Error`. New error types get a mapping there.
 - **Custom error classes set `this.name`.**
+- **Never call a locked operation (`BudgetSync.sync`, `BudgetWrites.write`) from inside `lock.run()`: the lock is not reentrant and it deadlocks.** That is why `BudgetWrites` calls `api.sync()` directly.
 - **Wrap every `@actual-app/api` call in `callApi`.** The library rejects with plain objects, not `Error`s, so an unwrapped call reaches Fastify as a non-Error. Known messages map to `NotFoundError`; the rest become `ActualApiError` (500).
 - **Check existence where the library fails silently.** An unknown account id gives balance `0` and transactions `[]`, so readers call `AccountReader.get()` first to return 404. Writes store unknown ids without complaint, so writers check every id first: the path target gives `NotFoundError` (404), an id in the body gives `InvalidInputError` (400).
 - **Don't spread a TypeBox schema into `Type.Optional`** (`Type.Optional({ ...Day, description })` puts `~optional` into the JSON schema and ajv strict mode fails at boot). Use a factory like `Day(description)`.
