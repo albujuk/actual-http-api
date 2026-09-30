@@ -184,11 +184,12 @@ TBD. Packaging (container image or other) is not decided yet. Whatever it ends u
 
 ```
 src/
-  main.ts        composition root: wires the layers, runs start-up and shutdown
+  main.ts        composition root: wires the modules, runs start-up and shutdown
   config.ts      environment → validated, typed config
   lifecycle.ts   process signals and fatal errors → one graceful shutdown
-  actual/        budget access layer: the only code that talks to Actual
-  http/          HTTP layer: app setup, error mapping, one module per resource
-  sync/          background jobs that keep the budget in sync
-test/            unit tests
+  core/          shared infrastructure: Actual connection and error translation,
+                 Fastify app setup and error mapping, background sync
+  features/      one folder per resource (accounts, transactions, …): its types,
+                 budget access, HTTP routes and tests together
+test/support/    shared test helpers (tests sit next to the code as *.test.ts)
 ```
