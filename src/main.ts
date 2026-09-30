@@ -19,6 +19,7 @@ import { PayeeQueries } from "./features/payees/payee-queries.js";
 import { payeeRoutes } from "./features/payees/payee-routes.js";
 import { TransactionQueries } from "./features/transactions/transaction-queries.js";
 import { transactionRoutes } from "./features/transactions/transaction-routes.js";
+import { ApiTransactionWriter } from "./features/transactions/transaction-writer.js";
 import { onShutdown } from "./lifecycle.js";
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -49,15 +50,20 @@ const periodicSync = new PeriodicSync(writes, config.syncIntervalMs, (err) =>
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
 const accounts = new AccountQueries(connection);
+const categories = new CategoryQueries(connection);
+const payees = new PayeeQueries(connection);
 
 const app = buildApp(
   [
     healthRoutes(connection, periodicSync),
     budgetRoutes(connection),
     accountRoutes(accounts),
-    transactionRoutes(new TransactionQueries(connection, accounts)),
-    categoryRoutes(new CategoryQueries(connection)),
-    payeeRoutes(new PayeeQueries(connection)),
+    transactionRoutes(
+      new TransactionQueries(connection, accounts),
+      new ApiTransactionWriter(writes, accounts, categories, payees),
+    ),
+    categoryRoutes(categories),
+    payeeRoutes(payees),
     budgetMonthRoutes(new BudgetMonthQueries(connection)),
     idRoutes(new ApiNameResolver(connection)),
   ],

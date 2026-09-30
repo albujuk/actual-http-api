@@ -103,18 +103,35 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 | `GET` | `/payees` | All payees |
 | `GET` | `/budget/months` | The months the budget covers: `["2026-01", ...]` |
 | `GET` | `/budget/:month` | Budget figures for `YYYY-MM`: totals plus budgeted, spent, balance and carryover per category. `404` for a month outside the budget |
+| `POST` | `/accounts/:id/transactions/import` | Body `{"transactions":[...],"opts":{"defaultCleared","dryRun"}}`. Reconciles against existing transactions, runs rules and creates the other side of transfers. Returns `{"added":[ids],"updated":[ids]}`. `dryRun` reports without writing |
+| `POST` | `/accounts/:id/transactions/add` | Body `{"transactions":[...],"opts":{"runTransfers","learnCategories"}}` (both default `false`). Inserts as-is, no reconciliation, so a retry adds duplicates. `{"ok":true}` |
 | `GET` | `/id?type=&name=` | `{"id": "..."}` for an exact name. `type` is `accounts`, `categories`, `payees` or `schedules`. `404` if no match |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
 
 The OpenAPI spec is generated from the route schemas, so it always matches the code. Responses are serialized through the same schemas, so fields a schema doesn't declare are never sent.
 
+### Writing transactions
+
+A new transaction (for `import` and `add`) takes `date` (`YYYY-MM-DD`) and `amount` (integer minor units), plus optional `payee` (an existing payee id), `payee_name` (matches a payee by name or creates one; `payee` wins), `imported_payee`, `category`, `notes`, `imported_id`, `cleared` and `subtransactions` (`[{"amount","category","notes"}]`, which makes a split). One request takes 1 to 1000 transactions.
+
+```sh
+curl -X POST http://127.0.0.1:3001/accounts/$ACCOUNT_ID/transactions/import \
+  -H 'content-type: application/json' \
+  -d '{"transactions":[{"date":"2026-09-30","amount":-450,"payee_name":"Cafe","imported_id":"bank-123"}]}'
+# {"added":["..."],"updated":[]}
+```
+
+Request bodies are strict: fields the schema doesn't declare are dropped before they reach Actual. Every account, payee and category id in a body must exist, or the request fails with `400` and nothing is written.
+
+A write that succeeds locally stays successful even if the sync after it fails (for example, the Actual server is briefly down). The failure is logged, and the next sync sends the change. So a client never retries a write that already happened.
+
 ### Errors
 
 Errors are JSON `{"error": "<message>"}`:
 
 - `503 {"error":"not ready"}`: the service is still connecting or loading the budget. Every budget endpoint returns it until `/healthz` is `200`.
-- `400`: the request failed schema validation (bad id, date, month or query value). The message names the field.
+- `400`: the request failed schema validation (bad id, date, month, amount, query value or body field; the message names the field), or a write body refers to an id that does not exist (for example `{"error":"unknown category: <id>"}`).
 - `404`: the route, or the account, month or name it refers to, does not exist (for example `{"error":"account not found"}`).
 - `500 {"error":"internal error"}`: details go to the log only, never to the client.
 
@@ -122,8 +139,6 @@ Errors are JSON `{"error": "<message>"}`:
 
 | Method | Path | Maps to | Notes |
 |---|---|---|---|
-| `POST` | `/accounts/:id/transactions/import` | `importTransactions` | Reconciles, runs rules, dedupes |
-| `POST` | `/accounts/:id/transactions/add` | `addTransactions` | Raw insert, no reconciliation |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | Body: `{ categoryId, amount }` |

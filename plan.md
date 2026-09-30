@@ -81,8 +81,8 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 | `GET` | `/accounts/:id` | `getAccounts` | `404` for an unknown id (built) |
 | `GET` | `/accounts/:id/balance` | `getAccountBalance` | optional `?cutoff=YYYY-MM-DD`, inclusive, parsed as local midnight. `404` for an unknown id (built) |
 | `GET` | `/accounts/:id/transactions?start=&end=` | `getTransactions` | inclusive date range, both optional. Splits grouped under `subtransactions`. `404` for an unknown id (built) |
-| `POST` | `/accounts/:id/transactions/import` | `importTransactions` | reconciles + runs rules + dedupes |
-| `POST` | `/accounts/:id/transactions/add` | `addTransactions` | raw insert, no reconcile |
+| `POST` | `/accounts/:id/transactions/import` | `importTransactions` | reconciles + runs rules + dedupes. `{ transactions, opts: { defaultCleared, dryRun } }` → `{ added, updated }` (built) |
+| `POST` | `/accounts/:id/transactions/add` | `addTransactions` | raw insert, no reconcile. `{ transactions, opts: { runTransfers, learnCategories } }` → `{ ok: true }` (built) |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
 | `GET` | `/categories` | `getCategories` | optional `?hidden=` (built) |
