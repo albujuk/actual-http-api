@@ -87,7 +87,7 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
 | `GET` | `/categories` | `getCategories` | optional `?hidden=` (built) |
 | `GET` | `/category-groups` | `getCategoryGroups` | categories nested, optional `?hidden=` (built) |
-| `GET` | `/payees` | `getPayees` | |
+| `GET` | `/payees` | `getPayees` | (built) |
 | `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM` |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | `{ categoryId, amount }` |
 | `POST` | `/query` | `runQuery` + `q(...)` | constrained ActualQL passthrough |

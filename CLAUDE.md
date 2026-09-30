@@ -34,14 +34,14 @@ src/
   lifecycle.ts             onShutdown(): runs once on SIGTERM/SIGINT or a fatal error, bounded by a timeout
   actual/
     types.ts               bridge-owned data types + narrow interfaces: Connection, BudgetLoader, BudgetCatalog,
-                           BudgetStatus, Syncable, AccountReader, TransactionReader, CategoryReader
+                           BudgetStatus, Syncable, AccountReader, TransactionReader, CategoryReader, PayeeReader
     errors.ts              NotReadyError (503), NotFoundError (404), ActualApiError (unmapped library error, 500)
     api-errors.ts          pure translateApiError() + callApi(): library APIError objects -> typed errors
     guard.ts               requireLoaded(status): throws NotReadyError before the budget loads
     dates.ts               pure parseDay(): YYYY-MM-DD -> local-midnight Date
     actual-connection.ts   ActualConnection: init/shutdown, list budgets, load one. One per process
     budget-sync.ts         BudgetSync: Syncable capability, guarded by BudgetStatus
-    *-queries.ts           AccountQueries, TransactionQueries, CategoryQueries:
+    *-queries.ts           AccountQueries, TransactionQueries, CategoryQueries, PayeeQueries:
                            one read capability each, guarded by BudgetStatus, library calls wrapped in callApi
     budget-selection.ts    pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
   http/
@@ -73,7 +73,7 @@ Conventions to keep:
 - `listBudgets()` keeps only remote files (`state: "remote"`), deduped by `groupId`. `api.getBudgets()` also returns local cache folders, which can be stale.
 - Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server, then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
 
-Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
+Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, `GET /payees`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
 
 ## Config (env)
 

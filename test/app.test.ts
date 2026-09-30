@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { NotFoundError } from "../src/actual/errors.js";
+import { ActualApiError, NotFoundError, NotReadyError } from "../src/actual/errors.js";
 import type { Account, BudgetSummary, Transaction } from "../src/actual/types.js";
 import { buildApp } from "../src/http/app.js";
 import { accountRoutes } from "../src/http/routes/accounts.js";
 import { budgetRoutes } from "../src/http/routes/budgets.js";
 import { categoryRoutes } from "../src/http/routes/categories.js";
 import { healthRoutes } from "../src/http/routes/health.js";
+import { payeeRoutes } from "../src/http/routes/payees.js";
 import { transactionRoutes } from "../src/http/routes/transactions.js";
 
 const budget: BudgetSummary = { syncId: "abc", name: "Home" };
@@ -61,6 +62,7 @@ function build(opts: { docs?: boolean; loaded?: BudgetSummary } = {}): FastifyIn
         },
         groups: async () => [],
       }),
+      payeeRoutes({ list: () => Promise.reject(new NotReadyError("no budget loaded")) }),
     ],
     { docs: opts.docs ?? true, version: "1.2.3" },
   );
@@ -87,6 +89,7 @@ describe("buildApp docs", () => {
       "/categories",
       "/category-groups",
       "/healthz",
+      "/payees",
     ]);
     expect(Object.keys(spec.paths["/healthz"].get.responses)).toEqual(["200", "500", "503"]);
     expect(Object.keys(spec.paths["/accounts/{id}/balance"].get.responses).sort()).toEqual([
@@ -102,6 +105,7 @@ describe("buildApp docs", () => {
       "accounts",
       "transactions",
       "categories",
+      "payees",
     ]);
   });
 
@@ -188,6 +192,12 @@ describe("read routes", () => {
     expect((await get("/categories?hidden=maybe")).statusCode).toBe(400);
   });
 
+  it("maps NotReadyError to 503", async () => {
+    const res = await get("/payees");
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: "not ready" });
+  });
+
   it.each(["start=2026-02-30", "end=2026-9-1", "start=yesterday"])("rejects transactions query %j with 400", async (q) => {
     const res = await get(`/accounts/a1/transactions?${q}`);
     expect(res.statusCode).toBe(400);
@@ -197,5 +207,30 @@ describe("read routes", () => {
   it("bounds the id length", async () => {
     expect((await get(`/accounts/${"x".repeat(65)}`)).statusCode).toBe(400);
     expect((await get(`/accounts/${"x".repeat(64)}`)).statusCode).toBe(404);
+  });
+});
+
+describe("5xx responses", () => {
+  const withPayees = (list: () => Promise<never>) => {
+    app = buildApp([payeeRoutes({ list })], { docs: false, version: "0.0.0" });
+    return app.inject({ method: "GET", url: "/payees" });
+  };
+
+  it("never send the message of an unmapped library error", async () => {
+    const res = await withPayees(() => Promise.reject(new ActualApiError("secret detail")));
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: "internal error" });
+  });
+
+  it("never send the message of a plain Error", async () => {
+    const res = await withPayees(() => Promise.reject(new Error("secret detail")));
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain("secret");
+  });
+
+  it("never send the contents of a non-Error rejection", async () => {
+    const res = await withPayees(() => Promise.reject({ type: "APIError", message: "secret detail" }));
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain("secret");
   });
 });

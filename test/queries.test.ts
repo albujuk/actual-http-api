@@ -3,6 +3,7 @@ import * as api from "@actual-app/api";
 import { AccountQueries } from "../src/actual/account-queries.js";
 import { CategoryQueries } from "../src/actual/category-queries.js";
 import { ActualApiError, NotFoundError, NotReadyError } from "../src/actual/errors.js";
+import { PayeeQueries } from "../src/actual/payee-queries.js";
 import { TransactionQueries } from "../src/actual/transaction-queries.js";
 import type { BudgetStatus, BudgetSummary } from "../src/actual/types.js";
 
@@ -12,6 +13,7 @@ vi.mock("@actual-app/api", () => ({
   getTransactions: vi.fn(),
   getCategories: vi.fn(),
   getCategoryGroups: vi.fn(),
+  getPayees: vi.fn(),
 }));
 
 const account = { id: "a1", name: "Checking", offbudget: false, closed: false, balance_current: null, account_group_id: null };
@@ -70,7 +72,8 @@ type LibraryFn =
   | "getAccountBalance"
   | "getTransactions"
   | "getCategories"
-  | "getCategoryGroups";
+  | "getCategoryGroups"
+  | "getPayees";
 
 // Every capability method, and the library call whose failure it must translate.
 const methods: Array<[name: string, fails: LibraryFn, call: () => Promise<unknown>]> = [
@@ -84,6 +87,7 @@ const methods: Array<[name: string, fails: LibraryFn, call: () => Promise<unknow
   ],
   ["CategoryQueries.list", "getCategories", () => new CategoryQueries(status).list({})],
   ["CategoryQueries.groups", "getCategoryGroups", () => new CategoryQueries(status).groups({})],
+  ["PayeeQueries.list", "getPayees", () => new PayeeQueries(status).list()],
 ];
 
 describe.each(methods)("%s", (_name, fails, call) => {

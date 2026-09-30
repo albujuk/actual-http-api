@@ -67,6 +67,8 @@ export type CategoryGroup = {
 
 export type HiddenFilter = { hidden?: boolean };
 
+export type Payee = { id: string; name: string; transfer_acct?: string | null };
+
 export interface AccountReader {
   list(): Promise<Account[]>;
   // Throws NotFoundError for an unknown id.
@@ -81,4 +83,8 @@ export interface TransactionReader {
 export interface CategoryReader {
   list(filter: HiddenFilter): Promise<Category[]>;
   groups(filter: HiddenFilter): Promise<CategoryGroup[]>;
+}
+
+export interface PayeeReader {
+  list(): Promise<Payee[]>;
 }
