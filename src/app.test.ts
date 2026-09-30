@@ -27,7 +27,7 @@ function build(opts: { docs?: boolean } = {}): FastifyInstance {
       accountRoutes({ list: async () => [account], get: async () => account, balance: async () => 0 }),
       transactionRoutes(
         { list: async () => [transaction] },
-        { import: async () => ({ added: [], updated: [] }), add: async () => {} },
+        { import: async () => ({ added: [], updated: [] }), add: async () => {}, update: async () => {}, delete: async () => {} },
       ),
       categoryRoutes({ list: async () => [], groups: async () => [] }),
       payeeRoutes({ list: async () => [] }),
@@ -65,7 +65,9 @@ describe("buildApp docs", () => {
       "/healthz",
       "/id",
       "/payees",
+      "/transactions/{id}",
     ]);
+    expect(Object.keys(spec.paths["/transactions/{id}"]).sort()).toEqual(["delete", "patch"]);
     expect(Object.keys(spec.paths["/healthz"].get.responses)).toEqual(["200", "500", "503"]);
     expect(Object.keys(spec.paths["/accounts/{id}/balance"].get.responses).sort()).toEqual([
       "200",

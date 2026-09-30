@@ -51,8 +51,21 @@ export type ImportResult = { added: string[]; updated: string[] };
 
 export type AddOptions = { runTransfers?: boolean; learnCategories?: boolean };
 
+// Fields to change. null clears payee, category or notes.
+export type TransactionPatch = {
+  account?: string;
+  date?: string;
+  amount?: number;
+  payee?: string | null;
+  category?: string | null;
+  notes?: string | null;
+  cleared?: boolean;
+};
+
 // Unknown ids referenced in a body throw InvalidInputError; an unknown target throws NotFoundError.
 export interface TransactionWriter {
   import(accountId: string, transactions: NewTransaction[], opts: ImportOptions): Promise<ImportResult>;
   add(accountId: string, transactions: NewTransaction[], opts: AddOptions): Promise<void>;
+  update(id: string, patch: TransactionPatch): Promise<void>;
+  delete(id: string): Promise<void>;
 }

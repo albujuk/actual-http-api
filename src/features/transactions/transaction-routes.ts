@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { InvalidInputError } from "../../core/actual/errors.js";
 import type { RouteModule } from "../../core/http/route-module.js";
 import {
   Amount,
@@ -118,6 +119,21 @@ const AddBody = Type.Object(
   { additionalProperties: false },
 );
 
+// Null comes first in each union: Fastify coerces types, and would turn null into "" for a string branch.
+// minProperties counts fields before unknown ones are stripped, so the handler rejects an empty result.
+const TransactionPatch = Type.Object(
+  {
+    account: Type.Optional(IdField("Moves the transaction to this account")),
+    date: Type.Optional(Day("Transaction date")),
+    amount: Type.Optional(Amount("Expenses are negative")),
+    payee: Type.Optional(Type.Union([Type.Null(), Id], { description: "Payee id, or null to clear" })),
+    category: Type.Optional(Type.Union([Type.Null(), Id], { description: "Category id, or null to clear" })),
+    notes: Type.Optional(Type.Union([Type.Null(), Notes], { description: "Notes, or null to clear" })),
+    cleared: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false, minProperties: 1 },
+);
+
 const Ok = Type.Object({ ok: Type.Literal(true) });
 
 export const transactionRoutes = (transactions: TransactionReader, writer: TransactionWriter): RouteModule => ({
@@ -172,6 +188,41 @@ export const transactionRoutes = (transactions: TransactionReader, writer: Trans
       },
       async (req) => {
         await writer.add(req.params.id, req.body.transactions, req.body.opts ?? {});
+        return { ok: true as const };
+      },
+    );
+
+    app.patch(
+      "/transactions/:id",
+      {
+        schema: {
+          tags: [tag.name],
+          summary: "Update a transaction",
+          params: IdParams,
+          body: TransactionPatch,
+          response: { 200: Ok, ...invalidInput, ...notFound, ...notReady, ...commonErrors },
+        },
+      },
+      async (req) => {
+        if (Object.keys(req.body).length === 0) throw new InvalidInputError("no known field to update");
+        await writer.update(req.params.id, req.body);
+        return { ok: true as const };
+      },
+    );
+
+    app.delete(
+      "/transactions/:id",
+      {
+        schema: {
+          tags: [tag.name],
+          summary: "Delete a transaction",
+          description: "Deleting a split parent deletes its parts.",
+          params: IdParams,
+          response: { 200: Ok, ...badRequest, ...notFound, ...notReady, ...commonErrors },
+        },
+      },
+      async (req) => {
+        await writer.delete(req.params.id);
         return { ok: true as const };
       },
     );

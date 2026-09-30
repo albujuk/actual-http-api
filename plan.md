@@ -83,8 +83,8 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 | `GET` | `/accounts/:id/transactions?start=&end=` | `getTransactions` | inclusive date range, both optional. Splits grouped under `subtransactions`. `404` for an unknown id (built) |
 | `POST` | `/accounts/:id/transactions/import` | `importTransactions` | reconciles + runs rules + dedupes. `{ transactions, opts: { defaultCleared, dryRun } }` → `{ added, updated }` (built) |
 | `POST` | `/accounts/:id/transactions/add` | `addTransactions` | raw insert, no reconcile. `{ transactions, opts: { runTransfers, learnCategories } }` → `{ ok: true }` (built) |
-| `PATCH` | `/transactions/:id` | `updateTransaction` | |
-| `DELETE` | `/transactions/:id` | `deleteTransaction` | |
+| `PATCH` | `/transactions/:id` | `updateTransaction` | `account`, `date`, `amount`, `payee`, `category`, `notes`, `cleared`; `null` clears payee/category/notes. `404` for an unknown id (built) |
+| `DELETE` | `/transactions/:id` | `deleteTransaction` | `404` for an unknown id (built) |
 | `GET` | `/categories` | `getCategories` | optional `?hidden=` (built) |
 | `GET` | `/category-groups` | `getCategoryGroups` | categories nested, optional `?hidden=` (built) |
 | `GET` | `/payees` | `getPayees` | (built) |

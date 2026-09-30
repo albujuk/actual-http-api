@@ -9,7 +9,22 @@ import type { CategoryReader } from "../categories/category-types.js";
 import type { PayeeReader } from "../payees/payee-types.js";
 import { ApiTransactionWriter, refsOf, rejectUnknown } from "./transaction-writer.js";
 
-vi.mock("@actual-app/api", () => ({ sync: vi.fn(), importTransactions: vi.fn(), addTransactions: vi.fn() }));
+vi.mock("@actual-app/api", () => {
+  // A minimal chainable q() that records its filter.
+  const q = vi.fn(() => {
+    const query = { filter: vi.fn(() => query), select: vi.fn(() => query), options: vi.fn(() => query) };
+    return query;
+  });
+  return {
+    q,
+    aqlQuery: vi.fn(),
+    sync: vi.fn(),
+    importTransactions: vi.fn(),
+    addTransactions: vi.fn(),
+    updateTransaction: vi.fn(),
+    deleteTransaction: vi.fn(),
+  };
+});
 
 const accounts: AccountReader = {
   list: async () => [account],
@@ -31,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   status.loaded = { syncId: "s", name: "Home" };
   vi.mocked(api.importTransactions).mockResolvedValue({ errors: [], added: ["t9"], updated: ["t1"], updatedPreview: [] });
+  vi.mocked(api.aqlQuery).mockResolvedValue({ data: [{ id: "t1" }] });
 });
 
 describe("ApiTransactionWriter.import", () => {
@@ -86,6 +102,43 @@ describe("ApiTransactionWriter.add", () => {
   });
 });
 
+describe("ApiTransactionWriter.update", () => {
+  it("updates a known transaction", async () => {
+    await writer.update("t1", { amount: -600, category: null });
+    expect(api.q).toHaveBeenCalledWith("transactions");
+    expect(api.updateTransaction).toHaveBeenCalledWith("t1", { amount: -600, category: null });
+    expect(api.sync).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unknown transaction instead of doing nothing", async () => {
+    vi.mocked(api.aqlQuery).mockResolvedValue({ data: [] });
+    await expect(writer.update("nope", { amount: 1 })).rejects.toThrow(new NotFoundError("transaction not found"));
+    expect(api.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["account", { account: "a9" }],
+    ["payee", { payee: "p9" }],
+    ["category", { category: "c9" }],
+  ])("rejects an unknown %s", async (kind, patch) => {
+    await expect(writer.update("t1", patch)).rejects.toThrow(new InvalidInputError(`unknown ${kind}: ${kind[0]}9`));
+    expect(api.updateTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("ApiTransactionWriter.delete", () => {
+  it("deletes a known transaction", async () => {
+    await writer.delete("t1");
+    expect(api.deleteTransaction).toHaveBeenCalledWith("t1");
+  });
+
+  it("rejects an unknown transaction", async () => {
+    vi.mocked(api.aqlQuery).mockResolvedValue({ data: [] });
+    await expect(writer.delete("nope")).rejects.toBeInstanceOf(NotFoundError);
+    expect(api.deleteTransaction).not.toHaveBeenCalled();
+  });
+});
+
 describe("refsOf", () => {
   it("collects distinct payee and category ids, split parts included", () => {
     expect(
@@ -111,4 +164,6 @@ describe("rejectUnknown", () => {
 describeLibraryCalls(status, [
   ["ApiTransactionWriter.import", vi.mocked(api.importTransactions), () => writer.import("a1", [coffee], {})],
   ["ApiTransactionWriter.add", vi.mocked(api.addTransactions), () => writer.add("a1", [coffee], {})],
+  ["ApiTransactionWriter.update", vi.mocked(api.updateTransaction), () => writer.update("t1", { amount: 1 })],
+  ["ApiTransactionWriter.delete", vi.mocked(api.deleteTransaction), () => writer.delete("t1")],
 ]);

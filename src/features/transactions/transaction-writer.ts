@@ -1,6 +1,6 @@
 import * as api from "@actual-app/api";
 import { callApi } from "../../core/actual/api-errors.js";
-import { ActualApiError, InvalidInputError } from "../../core/actual/errors.js";
+import { ActualApiError, InvalidInputError, NotFoundError } from "../../core/actual/errors.js";
 import type { WriteQueue } from "../../core/actual/types.js";
 import type { AccountReader } from "../accounts/account-types.js";
 import type { CategoryReader } from "../categories/category-types.js";
@@ -10,14 +10,15 @@ import type {
   ImportOptions,
   ImportResult,
   NewTransaction,
+  TransactionPatch,
   TransactionWriter,
 } from "./transaction-types.js";
 
 type Refs = { accounts?: string[]; payees?: string[]; categories?: string[] };
 
 // Every method runs inside the write queue, so its existence checks and the write see the same budget.
-// The library stores unknown account, payee and category ids without complaint, so each method
-// checks the ids first.
+// The library stores unknown account, payee and category ids without complaint, and update and
+// delete of an unknown transaction id do nothing, so each method checks the ids first.
 export class ApiTransactionWriter implements TransactionWriter {
   readonly #queue: WriteQueue;
   readonly #accounts: AccountReader;
@@ -60,6 +61,36 @@ export class ApiTransactionWriter implements TransactionWriter {
         }),
       );
     });
+  }
+
+  // The library resolves update and delete before its own batch write finishes, so the sync
+  // that follows can miss the change. The next sync (periodic, or after another write) sends it.
+  update(id: string, patch: TransactionPatch): Promise<void> {
+    return this.#queue.write(async () => {
+      await this.#requireTransaction(id);
+      await this.#checkRefs({
+        accounts: present([patch.account]),
+        payees: present([patch.payee]),
+        categories: present([patch.category]),
+      });
+      // null clears a field. The column accepts it, though the library's type says string.
+      const fields = patch as Parameters<typeof api.updateTransaction>[1];
+      await callApi(() => api.updateTransaction(id, fields));
+    });
+  }
+
+  delete(id: string): Promise<void> {
+    return this.#queue.write(async () => {
+      await this.#requireTransaction(id);
+      await callApi(() => api.deleteTransaction(id));
+    });
+  }
+
+  async #requireTransaction(id: string): Promise<void> {
+    // splits "all" matches split parents and parts alike. Deleted transactions never match.
+    const query = api.q("transactions").filter({ id }).select("id").options({ splits: "all" });
+    const { data } = (await callApi(() => api.aqlQuery(query))) as { data: unknown[] };
+    if (data.length === 0) throw new NotFoundError("transaction not found");
   }
 
   async #checkRefs({ accounts = [], payees = [], categories = [] }: Refs): Promise<void> {

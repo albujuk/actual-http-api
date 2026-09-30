@@ -105,6 +105,8 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 | `GET` | `/budget/:month` | Budget figures for `YYYY-MM`: totals plus budgeted, spent, balance and carryover per category. `404` for a month outside the budget |
 | `POST` | `/accounts/:id/transactions/import` | Body `{"transactions":[...],"opts":{"defaultCleared","dryRun"}}`. Reconciles against existing transactions, runs rules and creates the other side of transfers. Returns `{"added":[ids],"updated":[ids]}`. `dryRun` reports without writing |
 | `POST` | `/accounts/:id/transactions/add` | Body `{"transactions":[...],"opts":{"runTransfers","learnCategories"}}` (both default `false`). Inserts as-is, no reconciliation, so a retry adds duplicates. `{"ok":true}` |
+| `PATCH` | `/transactions/:id` | Body with any of `account`, `date`, `amount`, `payee`, `category`, `notes`, `cleared`. `null` clears `payee`, `category` or `notes`. `{"ok":true}`. `404` for an unknown transaction |
+| `DELETE` | `/transactions/:id` | Deletes the transaction. Deleting a split parent deletes its parts. `{"ok":true}`. `404` for an unknown transaction |
 | `GET` | `/id?type=&name=` | `{"id": "..."}` for an exact name. `type` is `accounts`, `categories`, `payees` or `schedules`. `404` if no match |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
@@ -132,15 +134,13 @@ Errors are JSON `{"error": "<message>"}`:
 
 - `503 {"error":"not ready"}`: the service is still connecting or loading the budget. Every budget endpoint returns it until `/healthz` is `200`.
 - `400`: the request failed schema validation (bad id, date, month, amount, query value or body field; the message names the field), or a write body refers to an id that does not exist (for example `{"error":"unknown category: <id>"}`).
-- `404`: the route, or the account, month or name it refers to, does not exist (for example `{"error":"account not found"}`).
+- `404`: the route, or the account, transaction, month or name in its path or query, does not exist (for example `{"error":"account not found"}`).
 - `500 {"error":"internal error"}`: details go to the log only, never to the client.
 
 ### Planned
 
 | Method | Path | Maps to | Notes |
 |---|---|---|---|
-| `PATCH` | `/transactions/:id` | `updateTransaction` | |
-| `DELETE` | `/transactions/:id` | `deleteTransaction` | |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | Body: `{ categoryId, amount }` |
 | `POST` | `/query` | `runQuery` + `q(...)` | ActualQL passthrough, limited to an allowlist of tables |
 | `POST` | `/bank-sync` | `runBankSync` | Optional body: `{ accountId }` |

@@ -15,6 +15,10 @@ beforeEach(() => {
   writer = {
     import: vi.fn<TransactionWriter["import"]>(async (id) => (id === "a1" ? { added: ["t9"], updated: [] } : accountNotFound())),
     add: vi.fn<TransactionWriter["add"]>(async (id) => (id === "a1" ? undefined : accountNotFound())),
+    update: vi.fn<TransactionWriter["update"]>(async () => {}),
+    delete: vi.fn<TransactionWriter["delete"]>(async (id) =>
+      id === "t1" ? undefined : Promise.reject(new NotFoundError("transaction not found")),
+    ),
   };
   app = testApp(
     transactionRoutes(
@@ -29,7 +33,7 @@ afterEach(async () => {
 });
 
 const get = (url: string) => app.inject({ method: "GET", url });
-const send = (method: "POST", url: string, payload?: unknown) =>
+const send = (method: "POST" | "PATCH" | "DELETE", url: string, payload?: unknown) =>
   app.inject({ method, url, ...(payload === undefined ? {} : { payload: payload as object }) });
 
 const coffee = { date: "2026-09-30", amount: -450, payee_name: "Cafe", imported_id: "bank-1" };
@@ -121,5 +125,38 @@ describe("POST /accounts/:id/transactions/add", () => {
 
   it("returns 404 for an unknown account", async () => {
     expect((await send("POST", "/accounts/nope/transactions/add", { transactions: [coffee] })).statusCode).toBe(404);
+  });
+});
+
+describe("PATCH /transactions/:id", () => {
+  it("passes the patch through, nulls included", async () => {
+    const res = await send("PATCH", "/transactions/t1", { amount: -600, category: null, notes: null });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(writer.update).toHaveBeenCalledWith("t1", { amount: -600, category: null, notes: null });
+  });
+
+  it.each([
+    ["an empty patch", {}],
+    ["only unknown fields", { tombstone: true }],
+    ["a bad date", { date: "30/09/2026" }],
+    ["a null account", { account: null }],
+  ])("rejects %s with 400", async (_name, body) => {
+    expect((await send("PATCH", "/transactions/t1", body)).statusCode).toBe(400);
+    expect(writer.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("DELETE /transactions/:id", () => {
+  it("deletes and returns ok", async () => {
+    const res = await send("DELETE", "/transactions/t1");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+  });
+
+  it("returns 404 for an unknown transaction", async () => {
+    const res = await send("DELETE", "/transactions/nope");
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "transaction not found" });
   });
 });
