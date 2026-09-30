@@ -6,11 +6,14 @@ import type { RouteModule } from "./route-module.js";
 export type AppOptions = {
   docs: boolean;
   version: string;
+  // Defaults to true. Tests turn it off to keep their output readable.
+  logger?: boolean;
 };
 
 // Knows no concrete routes: main.ts builds the modules with their dependencies.
 export function buildApp(modules: RouteModule[], options: AppOptions): FastifyInstance {
-  const app = Fastify({ logger: { redact: ["req.headers.authorization"] } });
+  const logger = (options.logger ?? true) && { redact: ["req.headers.authorization"] };
+  const app = Fastify({ logger });
   app.setErrorHandler(errorHandler);
   app.setNotFoundHandler(notFoundHandler);
   if (options.docs) registerDocs(app, options.version, modules.map((m) => m.tag));
