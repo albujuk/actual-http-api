@@ -37,11 +37,13 @@ curl http://127.0.0.1:3001/healthz
 # {"status":"ok","budget":"My Budget","lastSyncAt":"2026-09-30T12:00:00.000Z"}
 ```
 
+Browse the API docs at <http://127.0.0.1:3001/docs>. `pnpm dev` runs in development, where the docs are on by default.
+
 ### Scripts
 
 | Script | What it does |
 |---|---|
-| `pnpm dev` | Runs from source with `tsx watch`. Requires `.env` |
+| `pnpm dev` | Runs from source with `tsx watch` and `NODE_ENV=development`. Requires `.env` |
 | `pnpm build` | Compiles TypeScript into `dist/` |
 | `pnpm start` | Runs `dist/main.js`, loading `.env` if one exists |
 | `pnpm typecheck` | Type-checks `src` and `test` without emitting |
@@ -57,12 +59,14 @@ All configuration comes from environment variables. An empty value counts as uns
 | `ACTUAL_PASSWORD` | yes | | Actual server password |
 | `ACTUAL_SYNC_ID` | no | | Sync ID of the budget to load |
 | `ACTUAL_BUDGET_NAME` | no | | Name of the budget to load |
+| `NODE_ENV` | no | `production` | `development` or `production`. Sets the default for `DOCS_ENABLED`. `pnpm dev` sets `development` |
 | `HOST` | no | `127.0.0.1` | Interface to bind |
 | `PORT` | no | `3000` | Port to listen on (`.env.example` sets `3001`) |
 | `DATA_DIR` | no | `./data` | Directory for the local budget cache |
 | `SYNC_INTERVAL_MS` | no | `60000` | Interval for background sync with the server |
+| `DOCS_ENABLED` | no | on in development, off in production | Serve Swagger UI and the OpenAPI spec under `/docs`. Overrides the `NODE_ENV` default |
 
-Numeric variables must be integers in range: `PORT` 1–65535, `SYNC_INTERVAL_MS` 1000–2147483647. An invalid value stops start-up with a one-line error.
+Numeric variables must be integers in range: `PORT` 1–65535, `SYNC_INTERVAL_MS` 1000–2147483647. `DOCS_ENABLED` must be `true` or `false`. `NODE_ENV` must be `development` or `production`: `@actual-app/api` reads it too, and `test` would turn off its backups and normal sync. In development, Actual also lists GoCardless demo banks. An invalid value stops start-up with a one-line error.
 
 ### Choosing a budget
 
@@ -90,6 +94,10 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 |---|---|---|
 | `GET` | `/healthz` | `503 {"status":"starting"}` until the budget loads, then `200 {"status":"ok","budget":"<name>","lastSyncAt":"<ISO time>","lastSyncError":"<message>"}`. The sync fields are absent until the first sync or failure. It stays `200` when syncs fail |
 | `GET` | `/budgets` | Budgets on the server: `[{"syncId": "...", "name": "..."}]`. `503` until the service has connected |
+| `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
+| `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
+
+The OpenAPI spec is generated from the route schemas, so it always matches the code. Responses are serialized through the same schemas, so fields a schema doesn't declare are never sent.
 
 ### Errors
 
@@ -137,7 +145,7 @@ Errors are JSON `{"error": "<message>"}`:
 This service can read and rewrite your entire budget. Treat it like a database, not a public API.
 
 - **Keep it private.** It binds to `127.0.0.1` by default. Never publish its port to the internet.
-- **Authenticate callers.** A shared bearer token (`BRIDGE_TOKEN`, checked on every route except `/healthz`) is planned. Until it ships, rely on network isolation alone.
+- **Authenticate callers.** A shared bearer token (`BRIDGE_TOKEN`, checked on every route except `/healthz`) is planned. Until it ships, rely on network isolation alone. The `/docs` routes describe the API but return no budget data. They are off in production unless `DOCS_ENABLED=true`.
 - **Use TLS across hosts.** If clients run on another host, put the service behind a TLS reverse proxy, or use mTLS.
 - **Keep secrets in the environment, never in git.** This covers the server password and the bridge token. `.env` is gitignored.
 - **Verify TLS to the Actual server.** For self-signed or private CA certificates, set `NODE_EXTRA_CA_CERTS`. Do not use `NODE_TLS_REJECT_UNAUTHORIZED=0` outside a fully trusted network, because it turns off all certificate verification.
@@ -164,7 +172,7 @@ TBD. Packaging (container image or other) is not decided yet. Whatever it ends u
 | [ ] | 2. Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
 | [ ] | 3. Write endpoints | import, add, update, delete, set-amount, with a write lock and sync after each write | A posted transaction appears in the Actual UI |
 | [ ] | 4. Query and bank sync | Constrained `/query`, `/bank-sync` | Only allowlisted tables are queryable |
-| [ ] | 5. Hardening | Bearer-token auth, schema validation on every route, central error handler (basic version done), no secrets in logs | Security checklist is met |
+| [ ] | 5. Hardening | Bearer-token auth, schema validation on every route (TypeBox response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
 | [ ] | 6. Deploy (TBD) | Packaging and restart policy (approach not decided), persistent `DATA_DIR` | Survives a reboot |
 | [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
 

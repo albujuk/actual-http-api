@@ -76,6 +76,7 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 |---|---|---|---|
 | `GET` | `/healthz` | — | `200` only once init done |
 | `GET` | `/budgets` | `getBudgets` | lists budgets on the server (built) |
+| `GET` | `/docs`, `/docs/json`, `/docs/yaml` | — | Swagger UI + OpenAPI 3.1 spec generated from route schemas, on by default in development, off in production, `DOCS_ENABLED` overrides (built) |
 | `GET` | `/accounts` | `getAccounts` | |
 | `GET` | `/accounts/:id/balance` | `getAccountBalance` | optional `?cutoff=YYYY-MM-DD` |
 | `GET` | `/transactions/:accountId?start=&end=` | `getTransactions` | inclusive date range |
@@ -287,7 +288,7 @@ start().catch((e) => {
 | [ ] | 2 — Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
 | [ ] | 3 — Write endpoints | import, add, update, delete, set-amount, with write lock + sync after each write | a posted txn appears in the Actual UI |
 | [ ] | 4 — Query + bank sync | constrained `/query`, `/bank-sync` | allowlisted tables only |
-| [ ] | 5 — Hardening | bearer-token auth, schema validation on every route, central error handler (basic version done: `NotReadyError` → 503, generic 500), no secrets in logs | security checklist met |
+| [ ] | 5 — Hardening | bearer-token auth, schema validation on every route (TypeBox schemas feed validation, serialization and the OpenAPI spec; response schemas done for existing routes), central error handler (basic version done: `NotReadyError` → 503, generic 500), no secrets in logs | security checklist met |
 | [ ] | 6 — Deploy (TBD) | packaging and restart policy (approach not decided), persistent `DATA_DIR` | survives a reboot |
 | [ ] | 7 — Tests + observability | unit tests (budget selection, amounts), smoke test against a throwaway budget, structured logs | green CI (partial: Vitest unit tests for config, budget selection and periodic sync; pino-only logs) |
 
@@ -340,6 +341,7 @@ TBD. Packaging (container image or other) is not decided yet. Requirements for w
 
 1. **CLI fallback?** Worth keeping `@actual-app/cli` around for ad-hoc admin even with the bridge running.
 2. **Multiple budgets?** Currently one budget per instance. Serving several would mean one session per budget and routing by sync id — or simply one instance per budget.
+3. **Docs under auth.** A browser can't send a bearer header when it loads Swagger UI. Leaning: exempt `/docs*` from `BRIDGE_TOKEN` (the spec holds no budget data) and declare a `bearerAuth` security scheme so "Try it out" sends the token. In production they are off unless `DOCS_ENABLED=true`.
 
 ---
 

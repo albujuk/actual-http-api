@@ -7,7 +7,7 @@ Node.js HTTP bridge that wraps `@actual-app/api` so any HTTP client can read and
 ## Commands
 
 ```sh
-pnpm dev        # tsx watch, loads .env (required)
+pnpm dev        # tsx watch, NODE_ENV=development, loads .env (required)
 pnpm build      # tsc -p tsconfig.build.json -> dist/ (src only, with source maps)
 pnpm typecheck  # tsc --noEmit over src and test
 pnpm test       # vitest run
@@ -21,6 +21,7 @@ Run `pnpm typecheck` and `pnpm test` after every change. No linter or formatter 
 - Node 22.9+ (`engines`). ESM (`"type": "module"`), TypeScript 7 with `NodeNext` resolution, `verbatimModuleSyntax` and `noUncheckedIndexedAccess`. **Relative imports must use the `.js` extension** (`./types.js`), and type-only imports use `import type`.
 - Vitest for unit tests in `test/`.
 - Fastify 5, with pino logging via `logger: true`.
+- Route schemas in TypeBox (`typebox` 1.x, not `@sinclair/typebox`) via `@fastify/type-provider-typebox`. `@fastify/swagger` turns them into the OpenAPI 3.1 spec and `@fastify/swagger-ui` serves it.
 - `@actual-app/api` is pinned to an exact version. ActualQL and API details shift between releases, so re-check call signatures after an upgrade.
 - pnpm. `onlyBuiltDependencies` allows native builds only for `better-sqlite3` and `esbuild`.
 
@@ -38,12 +39,15 @@ src/
     budget-sync.ts         BudgetSync: Syncable capability, guarded by BudgetStatus
     budget-selection.ts    pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
   http/
-    app.ts                 buildApp(deps): creates Fastify, registers error handlers and route plugins
+    app.ts                 buildApp(modules, options): creates Fastify, error handlers, docs, then each module's plugin. Knows no concrete route
+    route-module.ts        RouteModule { tag, plugin }: the abstraction app.ts and docs depend on
+    docs.ts                registerDocs(): @fastify/swagger + Swagger UI at /docs, tags from the modules. Registers before routes
+    schemas.ts             cross-cutting TypeBox schemas only (ErrorResponse, commonErrors)
     error-handler.ts       JSON { error } responses; 5xx never carry the raw message
-    routes/*.ts            each route file is a factory (dep) => FastifyPluginAsync
+    routes/*.ts            each route file is a factory (deps) => RouteModule, owning its schemas and OpenAPI tag
   sync/
     periodic-sync.ts       PeriodicSync: chained setTimeout around a Syncable; implements SyncStatus
-test/                      Vitest unit tests for the pure logic and PeriodicSync
+test/                      Vitest unit tests for the pure logic and PeriodicSync, plus app.inject tests for routes and docs
 ```
 
 Conventions to keep:
@@ -51,6 +55,8 @@ Conventions to keep:
 - **Dependency injection through `main.ts` only.** Modules receive their collaborators and never import singletons. Only `main.ts` calls `loadConfig(process.env)`.
 - **Depend on the narrowest interface.** Routes and `PeriodicSync` take `BudgetStatus`, `BudgetCatalog` or `Syncable`, never `ActualConnection`. For a new capability, add an interface in `actual/types.ts` and implement it in a **new class** under `actual/` (like `BudgetSync`: it takes `BudgetStatus` and throws if no budget is loaded). Do not grow `ActualConnection`, which only owns connection and budget-load state. Inject the capability into a new route factory registered in `buildApp`.
 - **Keep `@actual-app/api` behind `actual/`.** The library is a process-wide singleton, so the `ActualConnection` constructor throws on a second instance. Budget selection policy lives in the composition root, not in `actual/`. Keep pure logic, such as `selectBudget`, in its own side-effect-free functions.
+- **Add a resource as a new `routes/<name>.ts` returning a `RouteModule`**, and add it to the `buildApp([...])` list in `main.ts`. Nothing else changes: `app.ts`, `docs.ts` and `schemas.ts` stay untouched. The module keeps its TypeBox schemas and its tag in its own file; only schemas used by several modules go in `schemas.ts`.
+- **Every route declares a TypeBox `schema`** with `tags: [tag.name]`, `summary`, and a `response` entry for each status it can send, spreading `commonErrors`. Undeclared response fields are dropped by serialization.
 - Private state uses `#fields`. Timers and errors go through injected `onError` callbacks, which wire to `app.log`.
 
 ## Runtime behavior
@@ -60,7 +66,7 @@ Conventions to keep:
 - `listBudgets()` keeps only remote files (`state: "remote"`), deduped by `groupId`. `api.getBudgets()` also returns local cache folders, which can be stale.
 - Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server, then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
 
-Current endpoints: `GET /healthz`, `GET /budgets`.
+Current endpoints: `GET /healthz`, `GET /budgets`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
 
 ## Config (env)
 
@@ -69,10 +75,12 @@ Current endpoints: `GET /healthz`, `GET /budgets`.
 | `ACTUAL_SERVER_URL` | required | |
 | `ACTUAL_PASSWORD` | required | |
 | `ACTUAL_SYNC_ID` / `ACTUAL_BUDGET_NAME` | unset | Budget selection, see above |
+| `NODE_ENV` | `production` | `development` or `production` only. `@actual-app/api` reads it too (`test` disables its backups, prefs writes and sync scheduling; `development` shows GoCardless demo banks) |
 | `HOST` | `127.0.0.1` | Keep the bridge private. It has full write access to the budget |
 | `PORT` | `3000` | Integer 1–65535. `.env.example` uses `3001` |
 | `DATA_DIR` | `./data` | Local budget cache (gitignored). Created on open |
 | `SYNC_INTERVAL_MS` | `60000` | Integer 1000–2147483647. Delay between the end of one sync and the start of the next |
+| `DOCS_ENABLED` | `NODE_ENV === "development"` | `true` or `false` only, overrides the environment default. Serves Swagger UI and the spec under `/docs` |
 
 Empty strings count as unset. Invalid values stop start-up with a one-line error. Never commit `.env`.
 
@@ -82,7 +90,7 @@ Empty strings count as unset. Invalid values stop start-up with a one-line error
 - **Serialize writes** behind an async mutex, and `sync()` after each write.
 - Money is integer minor units (expenses negative). Dates are `YYYY-MM-DD` and months are `YYYY-MM`. Use `utils.amountToInteger` rather than hand-rolled rounding.
 - Prefer `importTransactions` (it reconciles, runs rules and dedupes by `imported_id`) over `addTransactions` for user input.
-- Not built yet: bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, exempting `/healthz`), read and write endpoints, Fastify schema validation, mapping of `@actual-app/api` errors in the central error handler (it only knows `NotReadyError` so far), end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
+- Not built yet: bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, exempting `/healthz`; how `/docs` is handled is an open decision in plan.md), read and write endpoints, request schemas (`params`, `querystring`, `body`) for those endpoints, mapping of `@actual-app/api` errors in the central error handler (it only knows `NotReadyError` so far), end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
 
 ## Rules
 
