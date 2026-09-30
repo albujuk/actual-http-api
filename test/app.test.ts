@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { NotFoundError } from "../src/actual/errors.js";
-import type { Account, BudgetSummary } from "../src/actual/types.js";
+import type { Account, BudgetSummary, Transaction } from "../src/actual/types.js";
 import { buildApp } from "../src/http/app.js";
 import { accountRoutes } from "../src/http/routes/accounts.js";
 import { budgetRoutes } from "../src/http/routes/budgets.js";
 import { healthRoutes } from "../src/http/routes/health.js";
+import { transactionRoutes } from "../src/http/routes/transactions.js";
 
 const budget: BudgetSummary = { syncId: "abc", name: "Home" };
 
@@ -17,6 +18,20 @@ const account: Account = {
   balance_current: null,
   account_group_id: null,
 };
+
+const child = { id: "t2", account: "a1", date: "2026-09-02", amount: -500, is_child: true, parent_id: "t1" };
+// Internal library fields the response schema must drop.
+const internal = { tombstone: false, sort_order: 1, raw_synced_data: "{}", _unmatched: true };
+const transaction = {
+  id: "t1",
+  account: "a1",
+  date: "2026-09-02",
+  amount: -500,
+  payee: null,
+  is_parent: true,
+  subtransactions: [{ ...child, ...internal }],
+  ...internal,
+} as Transaction;
 
 const notFound = () => Promise.reject(new NotFoundError("account not found"));
 
@@ -37,6 +52,7 @@ function build(opts: { docs?: boolean; loaded?: BudgetSummary } = {}): FastifyIn
           return id === "a1" ? 1230 : notFound();
         },
       }),
+      transactionRoutes({ list: async (id) => (id === "a1" ? [transaction] : notFound()) }),
     ],
     { docs: opts.docs ?? true, version: "1.2.3" },
   );
@@ -58,6 +74,7 @@ describe("buildApp docs", () => {
       "/accounts",
       "/accounts/{id}",
       "/accounts/{id}/balance",
+      "/accounts/{id}/transactions",
       "/budgets",
       "/healthz",
     ]);
@@ -73,6 +90,7 @@ describe("buildApp docs", () => {
       "health",
       "budgets",
       "accounts",
+      "transactions",
     ]);
   });
 
@@ -139,6 +157,24 @@ describe("read routes", () => {
     const res = await get(`/accounts/a1/balance?cutoff=${cutoff}`);
     expect(res.statusCode).toBe(400);
     expect(res.json()).toHaveProperty("error");
+  });
+
+  it("serializes transactions without internal fields and keeps split parts", async () => {
+    const res = await get("/accounts/a1/transactions?start=2026-09-01&end=2026-09-30");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([
+      { id: "t1", account: "a1", date: "2026-09-02", amount: -500, payee: null, is_parent: true, subtransactions: [child] },
+    ]);
+  });
+
+  it("returns 404 for transactions of an unknown account", async () => {
+    expect((await get("/accounts/nope/transactions")).statusCode).toBe(404);
+  });
+
+  it.each(["start=2026-02-30", "end=2026-9-1", "start=yesterday"])("rejects transactions query %j with 400", async (q) => {
+    const res = await get(`/accounts/a1/transactions?${q}`);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/querystring\/(start|end)/);
   });
 
   it("bounds the id length", async () => {

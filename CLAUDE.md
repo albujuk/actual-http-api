@@ -34,15 +34,15 @@ src/
   lifecycle.ts             onShutdown(): runs once on SIGTERM/SIGINT or a fatal error, bounded by a timeout
   actual/
     types.ts               bridge-owned data types + narrow interfaces: Connection, BudgetLoader, BudgetCatalog,
-                           BudgetStatus, Syncable, AccountReader
+                           BudgetStatus, Syncable, AccountReader, TransactionReader
     errors.ts              NotReadyError (503), NotFoundError (404), ActualApiError (unmapped library error, 500)
     api-errors.ts          pure translateApiError() + callApi(): library APIError objects -> typed errors
     guard.ts               requireLoaded(status): throws NotReadyError before the budget loads
     dates.ts               pure parseDay(): YYYY-MM-DD -> local-midnight Date
     actual-connection.ts   ActualConnection: init/shutdown, list budgets, load one. One per process
     budget-sync.ts         BudgetSync: Syncable capability, guarded by BudgetStatus
-    *-queries.ts           AccountQueries: one read capability each, guarded by BudgetStatus, library calls
-                           wrapped in callApi
+    *-queries.ts           AccountQueries, TransactionQueries: one read capability each, guarded by BudgetStatus,
+                           library calls wrapped in callApi
     budget-selection.ts    pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
   http/
     app.ts                 buildApp(modules, options): creates Fastify, error handlers, docs, then each module's plugin. Knows no concrete route
@@ -73,7 +73,7 @@ Conventions to keep:
 - `listBudgets()` keeps only remote files (`state: "remote"`), deduped by `groupId`. `api.getBudgets()` also returns local cache folders, which can be stale.
 - Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server, then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
 
-Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
+Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
 
 ## Config (env)
 
@@ -97,6 +97,7 @@ Empty strings count as unset. Invalid values stop start-up with a one-line error
 - **Serialize writes** behind an async mutex, and `sync()` after each write.
 - Money is integer minor units (expenses negative). Dates are `YYYY-MM-DD` and months are `YYYY-MM`. Use `utils.amountToInteger` rather than hand-rolled rounding.
 - Prefer `importTransactions` (it reconciles, runs rules and dedupes by `imported_id`) over `addTransactions` for user input.
+- Account-scoped routes nest under `/accounts/:id/…` (including the Stage 3 `…/transactions/import|add`), so `/transactions/:id` always means a transaction id.
 - Not built yet: bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, exempting `/healthz`; how `/docs` is handled is an open decision in plan.md), read and write endpoints, request schemas (`params`, `querystring`, `body`) for those endpoints, end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
 
 ## Rules
@@ -109,7 +110,7 @@ Each rule guards against a bug class found in review. Follow them in every chang
 - **Never send a raw `err.message` in a 5xx response.** Throw typed errors and let `http/error-handler.ts` map them. A capability used before the connection or budget is ready throws `NotReadyError` (503), never a plain `Error`. New error types get a mapping there.
 - **Custom error classes set `this.name`.**
 - **Wrap every `@actual-app/api` call in `callApi`.** The library rejects with plain objects, not `Error`s, so an unwrapped call reaches Fastify as a non-Error. Known messages map to `NotFoundError`; the rest become `ActualApiError` (500).
-- **Check existence where the library fails silently.** An unknown account id gives balance `0`, so readers call `AccountReader.get()` first to return 404.
+- **Check existence where the library fails silently.** An unknown account id gives balance `0` and transactions `[]`, so readers call `AccountReader.get()` first to return 404.
 - **Don't spread a TypeBox schema into `Type.Optional`** (`Type.Optional({ ...Day, description })` puts `~optional` into the JSON schema and ajv strict mode fails at boot). Use a factory like `Day(description)`.
 - **Log through pino only.** No `console.*`. The one exception is the config error in `main.ts`, before the logger exists. `@actual-app/api` runs with `verbose: false`. Never log config values, passwords or unredacted request headers.
 - **Keep docs in sync in the same change.** A new or changed env var, default, endpoint, response shape, error format or roadmap stage updates `.env.example`, README.md, CLAUDE.md and plan.md together. Defaults in `.env.example` and in the docs match the code.
@@ -121,4 +122,4 @@ Each rule guards against a bug class found in review. Follow them in every chang
   - `shutdown()` syncs but swallows errors.
   - `init()` logs to the console unless you pass `verbose: false`.
   - Errors are plain objects `{ type: "APIError", message, meta }`, e.g. `"Not found: payees with name X"` (`getIDByName`), `"No budget exists for month: …"` (`getBudgetMonth`).
-  - `getAccountBalance(id, cutoff?: Date)` formats the cutoff in local time; unknown id returns `0`.
+  - `getAccountBalance(id, cutoff?: Date)` formats the cutoff in local time; unknown id returns `0`. `getTransactions()` skips empty bounds and returns splits grouped with `subtransactions`; unknown account returns `[]`.

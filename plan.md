@@ -70,7 +70,7 @@ A split has a parent (holding the total) and children (the parts). When summing 
 
 ### 2.2 Endpoint contract
 
-Keep it small and resource-shaped. All amounts are integer minor units in both directions.
+Keep it small and resource-shaped. All amounts are integer minor units in both directions. Account-scoped reads and writes nest under `/accounts/:id/…`, so `/transactions/:id` always means a transaction id.
 
 | Method | Path | Maps to | Notes |
 |---|---|---|---|
@@ -80,9 +80,9 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 | `GET` | `/accounts` | `getAccounts` | (built) |
 | `GET` | `/accounts/:id` | `getAccounts` | `404` for an unknown id (built) |
 | `GET` | `/accounts/:id/balance` | `getAccountBalance` | optional `?cutoff=YYYY-MM-DD`, inclusive, parsed as local midnight. `404` for an unknown id (built) |
-| `GET` | `/transactions/:accountId?start=&end=` | `getTransactions` | inclusive date range |
-| `POST` | `/transactions/:accountId/import` | `importTransactions` | reconciles + runs rules + dedupes |
-| `POST` | `/transactions/:accountId/add` | `addTransactions` | raw insert, no reconcile |
+| `GET` | `/accounts/:id/transactions?start=&end=` | `getTransactions` | inclusive date range, both optional. Splits grouped under `subtransactions`. `404` for an unknown id (built) |
+| `POST` | `/accounts/:id/transactions/import` | `importTransactions` | reconciles + runs rules + dedupes |
+| `POST` | `/accounts/:id/transactions/add` | `addTransactions` | raw insert, no reconcile |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
 | `GET` | `/categories` | `getCategories` | |
@@ -153,7 +153,7 @@ app.get<{ Params: { id: string }; Querystring: { cutoff?: string } }>(
 );
 
 app.get<{ Params: { accountId: string }; Querystring: { start?: string; end?: string } }>(
-  "/transactions/:accountId",
+  "/accounts/:accountId/transactions",
   async (req) => api.getTransactions(req.params.accountId, req.query.start, req.query.end),
 );
 
@@ -169,7 +169,7 @@ app.get<{ Querystring: { type: string; name: string } }>("/id", async (req) => (
 
 // ---- writes (locked + synced) ----
 app.post<{ Params: { accountId: string }; Body: { transactions: unknown[]; opts?: object } }>(
-  "/transactions/:accountId/import",
+  "/accounts/:accountId/transactions/import",
   async (req) =>
     withLock(async () => {
       const result = await api.importTransactions(

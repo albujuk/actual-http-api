@@ -97,6 +97,7 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 | `GET` | `/accounts` | All accounts: `[{"id","name","offbudget","closed","balance_current","account_group_id"}]` |
 | `GET` | `/accounts/:id` | One account. `404` if the id is unknown |
 | `GET` | `/accounts/:id/balance` | `{"balance": <minor units>}`. Optional `?cutoff=YYYY-MM-DD` (inclusive, defaults to today). `404` if the id is unknown |
+| `GET` | `/accounts/:id/transactions` | The account's transactions. Optional `?start=` and `?end=` (`YYYY-MM-DD`, inclusive). Splits are grouped: a parent carries its parts in `subtransactions`. `404` if the id is unknown |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
 
@@ -115,9 +116,8 @@ Errors are JSON `{"error": "<message>"}`:
 
 | Method | Path | Maps to | Notes |
 |---|---|---|---|
-| `GET` | `/transactions/:accountId?start=&end=` | `getTransactions` | Date range is inclusive |
-| `POST` | `/transactions/:accountId/import` | `importTransactions` | Reconciles, runs rules, dedupes |
-| `POST` | `/transactions/:accountId/add` | `addTransactions` | Raw insert, no reconciliation |
+| `POST` | `/accounts/:id/transactions/import` | `importTransactions` | Reconciles, runs rules, dedupes |
+| `POST` | `/accounts/:id/transactions/add` | `addTransactions` | Raw insert, no reconciliation |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
 | `GET` | `/categories` | `getCategories` | |
@@ -133,7 +133,7 @@ Errors are JSON `{"error": "<message>"}`:
 - **Amounts are integers in minor units** (usually cents), in both directions. `$120.30` is `12030`. Expenses are negative and income is positive. The service uses Actual's own `utils.amountToInteger` and `utils.integerToAmount` for conversion, so currencies without two decimal places round correctly.
 - **Dates are `YYYY-MM-DD` and months are `YYYY-MM`.** Clients should compute "today" in the user's timezone, not UTC.
 - **Prefer `import` over `add`.** `importTransactions` reconciles against existing transactions, runs rules (auto-categorization) and creates the other side of transfers. Send an `imported_id` with each transaction to make imports idempotent, since the same id is never added twice. Use `add` only for raw bulk loads.
-- **Split transactions** have a parent row (the total) and child rows (the parts). Filter on `is_parent: false` when summing or counting, or the totals double-count.
+- **Split transactions** have a parent row (the total) and child rows (the parts). `GET /accounts/:id/transactions` groups them: the top level holds parents and plain transactions, and each parent lists its parts in `subtransactions`. Sum the top level or the parts, never both, or the totals double-count.
 
 ## Operational constraints
 

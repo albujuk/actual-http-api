@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "@actual-app/api";
 import { AccountQueries } from "../src/actual/account-queries.js";
 import { ActualApiError, NotFoundError, NotReadyError } from "../src/actual/errors.js";
+import { TransactionQueries } from "../src/actual/transaction-queries.js";
 import type { BudgetStatus, BudgetSummary } from "../src/actual/types.js";
 
 vi.mock("@actual-app/api", () => ({
   getAccounts: vi.fn(),
   getAccountBalance: vi.fn(),
+  getTransactions: vi.fn(),
 }));
 
 const account = { id: "a1", name: "Checking", offbudget: false, closed: false, balance_current: null, account_group_id: null };
@@ -45,15 +47,36 @@ describe("AccountQueries", () => {
   });
 });
 
+describe("TransactionQueries", () => {
+  it("rejects an unknown account instead of returning []", async () => {
+    const queries = new TransactionQueries(status, new AccountQueries(status));
+    await expect(queries.list("nope", {})).rejects.toBeInstanceOf(NotFoundError);
+    expect(api.getTransactions).not.toHaveBeenCalled();
+  });
+
+  it("sends missing bounds as empty strings, which the library skips", async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue([]);
+    const queries = new TransactionQueries(status, new AccountQueries(status));
+    await queries.list("a1", { start: "2026-09-01" });
+    expect(api.getTransactions).toHaveBeenCalledWith("a1", "2026-09-01", "");
+  });
+});
+
 type LibraryFn =
   | "getAccounts"
-  | "getAccountBalance";
+  | "getAccountBalance"
+  | "getTransactions";
 
 // Every capability method, and the library call whose failure it must translate.
 const methods: Array<[name: string, fails: LibraryFn, call: () => Promise<unknown>]> = [
   ["AccountQueries.list", "getAccounts", () => new AccountQueries(status).list()],
   ["AccountQueries.get", "getAccounts", () => new AccountQueries(status).get("a1")],
   ["AccountQueries.balance", "getAccountBalance", () => new AccountQueries(status).balance("a1")],
+  [
+    "TransactionQueries.list",
+    "getTransactions",
+    () => new TransactionQueries(status, new AccountQueries(status)).list("a1", {}),
+  ],
 ];
 
 describe.each(methods)("%s", (_name, fails, call) => {

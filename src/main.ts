@@ -4,10 +4,12 @@ import { AccountQueries } from "./actual/account-queries.js";
 import { ActualConnection } from "./actual/actual-connection.js";
 import { selectBudget } from "./actual/budget-selection.js";
 import { BudgetSync } from "./actual/budget-sync.js";
+import { TransactionQueries } from "./actual/transaction-queries.js";
 import { buildApp } from "./http/app.js";
 import { accountRoutes } from "./http/routes/accounts.js";
 import { budgetRoutes } from "./http/routes/budgets.js";
 import { healthRoutes } from "./http/routes/health.js";
+import { transactionRoutes } from "./http/routes/transactions.js";
 import { onShutdown } from "./lifecycle.js";
 import { PeriodicSync } from "./sync/periodic-sync.js";
 
@@ -42,6 +44,7 @@ const app = buildApp(
     healthRoutes(connection, periodicSync),
     budgetRoutes(connection),
     accountRoutes(accounts),
+    transactionRoutes(new TransactionQueries(connection, accounts)),
   ],
   { docs: config.docsEnabled, version },
 );
