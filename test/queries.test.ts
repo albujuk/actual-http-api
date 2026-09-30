@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "@actual-app/api";
 import { AccountQueries } from "../src/actual/account-queries.js";
+import { CategoryQueries } from "../src/actual/category-queries.js";
 import { ActualApiError, NotFoundError, NotReadyError } from "../src/actual/errors.js";
 import { TransactionQueries } from "../src/actual/transaction-queries.js";
 import type { BudgetStatus, BudgetSummary } from "../src/actual/types.js";
@@ -9,6 +10,8 @@ vi.mock("@actual-app/api", () => ({
   getAccounts: vi.fn(),
   getAccountBalance: vi.fn(),
   getTransactions: vi.fn(),
+  getCategories: vi.fn(),
+  getCategoryGroups: vi.fn(),
 }));
 
 const account = { id: "a1", name: "Checking", offbudget: false, closed: false, balance_current: null, account_group_id: null };
@@ -65,7 +68,9 @@ describe("TransactionQueries", () => {
 type LibraryFn =
   | "getAccounts"
   | "getAccountBalance"
-  | "getTransactions";
+  | "getTransactions"
+  | "getCategories"
+  | "getCategoryGroups";
 
 // Every capability method, and the library call whose failure it must translate.
 const methods: Array<[name: string, fails: LibraryFn, call: () => Promise<unknown>]> = [
@@ -77,6 +82,8 @@ const methods: Array<[name: string, fails: LibraryFn, call: () => Promise<unknow
     "getTransactions",
     () => new TransactionQueries(status, new AccountQueries(status)).list("a1", {}),
   ],
+  ["CategoryQueries.list", "getCategories", () => new CategoryQueries(status).list({})],
+  ["CategoryQueries.groups", "getCategoryGroups", () => new CategoryQueries(status).groups({})],
 ];
 
 describe.each(methods)("%s", (_name, fails, call) => {
@@ -92,3 +99,14 @@ describe.each(methods)("%s", (_name, fails, call) => {
   });
 });
 
+describe("CategoryQueries", () => {
+  it("passes the hidden filter through", async () => {
+    vi.mocked(api.getCategories).mockResolvedValue([]);
+    vi.mocked(api.getCategoryGroups).mockResolvedValue([]);
+    const queries = new CategoryQueries(status);
+    await queries.list({ hidden: false });
+    await queries.groups({ hidden: true });
+    expect(api.getCategories).toHaveBeenCalledWith({ hidden: false });
+    expect(api.getCategoryGroups).toHaveBeenCalledWith({ hidden: true });
+  });
+});

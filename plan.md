@@ -85,7 +85,8 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 | `POST` | `/accounts/:id/transactions/add` | `addTransactions` | raw insert, no reconcile |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
-| `GET` | `/categories` | `getCategories` | |
+| `GET` | `/categories` | `getCategories` | optional `?hidden=` (built) |
+| `GET` | `/category-groups` | `getCategoryGroups` | categories nested, optional `?hidden=` (built) |
 | `GET` | `/payees` | `getPayees` | |
 | `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM` |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | `{ categoryId, amount }` |

@@ -98,6 +98,8 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 | `GET` | `/accounts/:id` | One account. `404` if the id is unknown |
 | `GET` | `/accounts/:id/balance` | `{"balance": <minor units>}`. Optional `?cutoff=YYYY-MM-DD` (inclusive, defaults to today). `404` if the id is unknown |
 | `GET` | `/accounts/:id/transactions` | The account's transactions. Optional `?start=` and `?end=` (`YYYY-MM-DD`, inclusive). Splits are grouped: a parent carries its parts in `subtransactions`. `404` if the id is unknown |
+| `GET` | `/categories` | All categories, flat. Optional `?hidden=true\|false` |
+| `GET` | `/category-groups` | Category groups with their categories nested. Optional `?hidden=true\|false` |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
 
@@ -120,7 +122,6 @@ Errors are JSON `{"error": "<message>"}`:
 | `POST` | `/accounts/:id/transactions/add` | `addTransactions` | Raw insert, no reconciliation |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
-| `GET` | `/categories` | `getCategories` | |
 | `GET` | `/payees` | `getPayees` | |
 | `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM` |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | Body: `{ categoryId, amount }` |

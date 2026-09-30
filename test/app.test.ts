@@ -5,6 +5,7 @@ import type { Account, BudgetSummary, Transaction } from "../src/actual/types.js
 import { buildApp } from "../src/http/app.js";
 import { accountRoutes } from "../src/http/routes/accounts.js";
 import { budgetRoutes } from "../src/http/routes/budgets.js";
+import { categoryRoutes } from "../src/http/routes/categories.js";
 import { healthRoutes } from "../src/http/routes/health.js";
 import { transactionRoutes } from "../src/http/routes/transactions.js";
 
@@ -36,7 +37,7 @@ const transaction = {
 const notFound = () => Promise.reject(new NotFoundError("account not found"));
 
 let app: FastifyInstance;
-let calls: { balanceCutoff?: Date };
+let calls: { balanceCutoff?: Date; categoryFilter?: unknown };
 
 function build(opts: { docs?: boolean; loaded?: BudgetSummary } = {}): FastifyInstance {
   calls = {};
@@ -53,6 +54,13 @@ function build(opts: { docs?: boolean; loaded?: BudgetSummary } = {}): FastifyIn
         },
       }),
       transactionRoutes({ list: async (id) => (id === "a1" ? [transaction] : notFound()) }),
+      categoryRoutes({
+        list: async (filter) => {
+          calls.categoryFilter = filter;
+          return [];
+        },
+        groups: async () => [],
+      }),
     ],
     { docs: opts.docs ?? true, version: "1.2.3" },
   );
@@ -76,6 +84,8 @@ describe("buildApp docs", () => {
       "/accounts/{id}/balance",
       "/accounts/{id}/transactions",
       "/budgets",
+      "/categories",
+      "/category-groups",
       "/healthz",
     ]);
     expect(Object.keys(spec.paths["/healthz"].get.responses)).toEqual(["200", "500", "503"]);
@@ -91,6 +101,7 @@ describe("buildApp docs", () => {
       "budgets",
       "accounts",
       "transactions",
+      "categories",
     ]);
   });
 
@@ -169,6 +180,12 @@ describe("read routes", () => {
 
   it("returns 404 for transactions of an unknown account", async () => {
     expect((await get("/accounts/nope/transactions")).statusCode).toBe(404);
+  });
+
+  it("coerces the hidden filter to a boolean", async () => {
+    await get("/categories?hidden=false");
+    expect(calls.categoryFilter).toEqual({ hidden: false });
+    expect((await get("/categories?hidden=maybe")).statusCode).toBe(400);
   });
 
   it.each(["start=2026-02-30", "end=2026-9-1", "start=yesterday"])("rejects transactions query %j with 400", async (q) => {

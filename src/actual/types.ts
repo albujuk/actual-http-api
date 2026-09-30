@@ -55,6 +55,18 @@ export type Transaction = {
 
 export type DateRange = { start?: string; end?: string };
 
+export type Category = { id: string; name: string; is_income: boolean; hidden: boolean; group_id: string };
+
+export type CategoryGroup = {
+  id: string;
+  name: string;
+  is_income: boolean;
+  hidden: boolean;
+  categories: Category[];
+};
+
+export type HiddenFilter = { hidden?: boolean };
+
 export interface AccountReader {
   list(): Promise<Account[]>;
   // Throws NotFoundError for an unknown id.
@@ -64,4 +76,9 @@ export interface AccountReader {
 
 export interface TransactionReader {
   list(accountId: string, range: DateRange): Promise<Transaction[]>;
+}
+
+export interface CategoryReader {
+  list(filter: HiddenFilter): Promise<Category[]>;
+  groups(filter: HiddenFilter): Promise<CategoryGroup[]>;
 }
