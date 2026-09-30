@@ -70,27 +70,30 @@ A split has a parent (holding the total) and children (the parts). When summing 
 
 ### 2.2 Endpoint contract
 
-Keep it small and resource-shaped. All amounts are integer minor units in both directions.
+Keep it small and resource-shaped. All amounts are integer minor units in both directions. Account-scoped reads and writes nest under `/accounts/:id/…`, so `/transactions/:id` always means a transaction id.
 
 | Method | Path | Maps to | Notes |
 |---|---|---|---|
 | `GET` | `/healthz` | — | `200` only once init done |
 | `GET` | `/budgets` | `getBudgets` | lists budgets on the server (built) |
 | `GET` | `/docs`, `/docs/json`, `/docs/yaml` | — | Swagger UI + OpenAPI 3.1 spec generated from route schemas, on by default in development, off in production, `DOCS_ENABLED` overrides (built) |
-| `GET` | `/accounts` | `getAccounts` | |
-| `GET` | `/accounts/:id/balance` | `getAccountBalance` | optional `?cutoff=YYYY-MM-DD` |
-| `GET` | `/transactions/:accountId?start=&end=` | `getTransactions` | inclusive date range |
-| `POST` | `/transactions/:accountId/import` | `importTransactions` | reconciles + runs rules + dedupes |
-| `POST` | `/transactions/:accountId/add` | `addTransactions` | raw insert, no reconcile |
+| `GET` | `/accounts` | `getAccounts` | (built) |
+| `GET` | `/accounts/:id` | `getAccounts` | `404` for an unknown id (built) |
+| `GET` | `/accounts/:id/balance` | `getAccountBalance` | optional `?cutoff=YYYY-MM-DD`, inclusive, parsed as local midnight. `404` for an unknown id (built) |
+| `GET` | `/accounts/:id/transactions?start=&end=` | `getTransactions` | inclusive date range, both optional. Splits grouped under `subtransactions`. `404` for an unknown id (built) |
+| `POST` | `/accounts/:id/transactions/import` | `importTransactions` | reconciles + runs rules + dedupes |
+| `POST` | `/accounts/:id/transactions/add` | `addTransactions` | raw insert, no reconcile |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
-| `GET` | `/categories` | `getCategories` | |
-| `GET` | `/payees` | `getPayees` | |
-| `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM` |
+| `GET` | `/categories` | `getCategories` | optional `?hidden=` (built) |
+| `GET` | `/category-groups` | `getCategoryGroups` | categories nested, optional `?hidden=` (built) |
+| `GET` | `/payees` | `getPayees` | (built) |
+| `GET` | `/budget/months` | `getBudgetMonths` | months the budget covers (built) |
+| `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM`, `404` outside the budget (built) |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | `{ categoryId, amount }` |
 | `POST` | `/query` | `runQuery` + `q(...)` | constrained ActualQL passthrough |
 | `POST` | `/bank-sync` | `runBankSync` | optional `{ accountId }` |
-| `GET` | `/id?type=&name=` | `getIDByName` | resolve names → ids |
+| `GET` | `/id?type=&name=` | `getIDByName` | resolve names → ids, `404` if no match (built) |
 
 **`import` vs `add`:** default to `importTransactions` for user input, because it reconciles (dedupes), runs rules (auto-categorization), and creates the other side of transfers. Use `addTransactions` only for bulk raw dumps. An `imported_id` makes imports idempotent — the same id is never added twice.
 
@@ -152,7 +155,7 @@ app.get<{ Params: { id: string }; Querystring: { cutoff?: string } }>(
 );
 
 app.get<{ Params: { accountId: string }; Querystring: { start?: string; end?: string } }>(
-  "/transactions/:accountId",
+  "/accounts/:accountId/transactions",
   async (req) => api.getTransactions(req.params.accountId, req.query.start, req.query.end),
 );
 
@@ -163,12 +166,12 @@ app.get<{ Params: { month: string } }>("/budget/:month", async (req) =>
 );
 
 app.get<{ Querystring: { type: string; name: string } }>("/id", async (req) => ({
-  id: await api.getIDByName({ type: req.query.type, name: req.query.name }),
+  id: await api.getIDByName(req.query.type, req.query.name), // positional, not an object
 }));
 
 // ---- writes (locked + synced) ----
 app.post<{ Params: { accountId: string }; Body: { transactions: unknown[]; opts?: object } }>(
-  "/transactions/:accountId/import",
+  "/accounts/:accountId/transactions/import",
   async (req) =>
     withLock(async () => {
       const result = await api.importTransactions(
@@ -285,12 +288,12 @@ start().catch((e) => {
 |---|---|---|---|
 | [x] | 0 — Prereqs | Node 22.9+, pnpm, Actual server reachable | `curl` the server, `pnpm add @actual-app/api fastify` |
 | [x] | 1 — Skeleton | init + budget selection + downloadBudget + `/healthz` + `/budgets` + periodic sync + graceful shutdown | `/healthz` returns ok after warm-up |
-| [ ] | 2 — Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
+| [x] | 2 — Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
 | [ ] | 3 — Write endpoints | import, add, update, delete, set-amount, with write lock + sync after each write | a posted txn appears in the Actual UI |
 | [ ] | 4 — Query + bank sync | constrained `/query`, `/bank-sync` | allowlisted tables only |
-| [ ] | 5 — Hardening | bearer-token auth, schema validation on every route (TypeBox schemas feed validation, serialization and the OpenAPI spec; response schemas done for existing routes), central error handler (basic version done: `NotReadyError` → 503, generic 500), no secrets in logs | security checklist met |
+| [ ] | 5 — Hardening | bearer-token auth, schema validation on every route (TypeBox schemas feed validation, serialization and the OpenAPI spec; request and response schemas done for existing routes), central error handler (basic version done: `NotReadyError` → 503, `NotFoundError` → 404, validation → 400, library `APIError` objects translated in `actual/`, generic 500), no secrets in logs | security checklist met |
 | [ ] | 6 — Deploy (TBD) | packaging and restart policy (approach not decided), persistent `DATA_DIR` | survives a reboot |
-| [ ] | 7 — Tests + observability | unit tests (budget selection, amounts), smoke test against a throwaway budget, structured logs | green CI (partial: Vitest unit tests for config, budget selection and periodic sync; pino-only logs) |
+| [ ] | 7 — Tests + observability | unit tests (budget selection, amounts), smoke test against a throwaway budget, structured logs | green CI (partial: Vitest unit tests for config, budget selection, periodic sync, error translation, dates and budget-month mapping, plus `app.inject` route tests; pino-only logs) |
 
 ---
 
@@ -328,7 +331,7 @@ TBD. Packaging (container image or other) is not decided yet. Requirements for w
 - **Persist `dataDir`.** Without a volume, every restart re-downloads the whole budget.
 - **Crash recovery.** On unhandled start-up error, exit non-zero and let the supervisor restart (which re-inits). Don't limp along with a half-loaded budget.
 - **Sync timing.** Sync after every write so other devices see changes, and on a timer so the bridge sees *theirs*. Document the interval.
-- **Name resolution.** Callers have names, the API wants ids. `/id` (`getIDByName`) or cached category/payee lists; return a clear 404 for unknown names.
+- **Name resolution.** Callers have names, the API wants ids. `/id` (`getIDByName`) or cached category/payee lists; unknown names return 404 (built).
 - **Multi-currency / rounding.** If the budget isn't 2-decimal, `*100` is wrong — use `amountToInteger`.
 - **Error responses.** Consistent JSON `{ error }` with correct 4xx/5xx; never leak stack traces or secrets.
 - **Observability.** Structured logs, request ids, and a heartbeat so it's obvious the bridge is alive.

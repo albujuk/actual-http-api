@@ -1,11 +1,23 @@
 import { readFileSync } from "node:fs";
 import { loadConfig, type Config } from "./config.js";
+import { AccountQueries } from "./actual/account-queries.js";
 import { ActualConnection } from "./actual/actual-connection.js";
+import { BudgetMonthQueries } from "./actual/budget-month-queries.js";
 import { selectBudget } from "./actual/budget-selection.js";
 import { BudgetSync } from "./actual/budget-sync.js";
+import { CategoryQueries } from "./actual/category-queries.js";
+import { ApiNameResolver } from "./actual/name-resolver.js";
+import { PayeeQueries } from "./actual/payee-queries.js";
+import { TransactionQueries } from "./actual/transaction-queries.js";
 import { buildApp } from "./http/app.js";
+import { accountRoutes } from "./http/routes/accounts.js";
+import { budgetMonthRoutes } from "./http/routes/budget-months.js";
 import { budgetRoutes } from "./http/routes/budgets.js";
+import { categoryRoutes } from "./http/routes/categories.js";
 import { healthRoutes } from "./http/routes/health.js";
+import { idRoutes } from "./http/routes/ids.js";
+import { payeeRoutes } from "./http/routes/payees.js";
+import { transactionRoutes } from "./http/routes/transactions.js";
 import { onShutdown } from "./lifecycle.js";
 import { PeriodicSync } from "./sync/periodic-sync.js";
 
@@ -33,10 +45,21 @@ const periodicSync = new PeriodicSync(new BudgetSync(connection), config.syncInt
 // package.json sits one level above both src/ and dist/.
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
-const app = buildApp([healthRoutes(connection, periodicSync), budgetRoutes(connection)], {
-  docs: config.docsEnabled,
-  version,
-});
+const accounts = new AccountQueries(connection);
+
+const app = buildApp(
+  [
+    healthRoutes(connection, periodicSync),
+    budgetRoutes(connection),
+    accountRoutes(accounts),
+    transactionRoutes(new TransactionQueries(connection, accounts)),
+    categoryRoutes(new CategoryQueries(connection)),
+    payeeRoutes(new PayeeQueries(connection)),
+    budgetMonthRoutes(new BudgetMonthQueries(connection)),
+    idRoutes(new ApiNameResolver(connection)),
+  ],
+  { docs: config.docsEnabled, version },
+);
 
 const shutdown = new AbortController();
 const startup = start(shutdown.signal);

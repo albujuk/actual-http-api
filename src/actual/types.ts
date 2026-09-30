@@ -20,3 +20,111 @@ export interface Connection {
 export interface BudgetLoader {
   load(budget: BudgetSummary): Promise<void>;
 }
+
+// Budget data as the bridge exposes it. Amounts are integer minor units, dates YYYY-MM-DD.
+
+export type Account = {
+  id: string;
+  name: string;
+  offbudget: boolean;
+  closed: boolean;
+  balance_current: number | null;
+  account_group_id: string | null;
+};
+
+export type Transaction = {
+  id: string;
+  account: string;
+  date: string;
+  amount: number;
+  payee?: string | null;
+  category?: string | null;
+  notes?: string | null;
+  imported_id?: string | null;
+  imported_payee?: string | null;
+  transfer_id?: string | null;
+  schedule?: string | null;
+  cleared?: boolean;
+  reconciled?: boolean;
+  is_parent?: boolean;
+  is_child?: boolean;
+  parent_id?: string | null;
+  starting_balance_flag?: boolean;
+  subtransactions?: Transaction[];
+};
+
+export type DateRange = { start?: string; end?: string };
+
+export type Category = { id: string; name: string; is_income: boolean; hidden: boolean; group_id: string };
+
+export type CategoryGroup = {
+  id: string;
+  name: string;
+  is_income: boolean;
+  hidden: boolean;
+  categories: Category[];
+};
+
+export type HiddenFilter = { hidden?: boolean };
+
+export type Payee = { id: string; name: string; transfer_acct?: string | null };
+
+// Per-month figures. Expense entries carry budgeted/spent/balance/carryover, income entries received.
+type MonthFigures = {
+  budgeted?: number;
+  spent?: number;
+  received?: number;
+  balance?: number;
+  carryover?: boolean;
+};
+
+export type BudgetMonthCategory = Category & MonthFigures;
+
+export type BudgetMonthGroup = Omit<CategoryGroup, "categories"> &
+  MonthFigures & { categories: BudgetMonthCategory[] };
+
+export type BudgetMonth = {
+  month: string;
+  incomeAvailable: number;
+  lastMonthOverspent: number;
+  forNextMonth: number;
+  totalBudgeted: number;
+  toBudget: number;
+  fromLastMonth: number;
+  totalIncome: number;
+  totalSpent: number;
+  totalBalance: number;
+  categoryGroups: BudgetMonthGroup[];
+};
+
+export const NAME_TYPES = ["accounts", "categories", "payees", "schedules"] as const;
+export type NameType = (typeof NAME_TYPES)[number];
+
+export interface AccountReader {
+  list(): Promise<Account[]>;
+  // Throws NotFoundError for an unknown id.
+  get(id: string): Promise<Account>;
+  balance(id: string, cutoff?: Date): Promise<number>;
+}
+
+export interface TransactionReader {
+  list(accountId: string, range: DateRange): Promise<Transaction[]>;
+}
+
+export interface CategoryReader {
+  list(filter: HiddenFilter): Promise<Category[]>;
+  groups(filter: HiddenFilter): Promise<CategoryGroup[]>;
+}
+
+export interface PayeeReader {
+  list(): Promise<Payee[]>;
+}
+
+export interface BudgetMonthReader {
+  months(): Promise<string[]>;
+  month(month: string): Promise<BudgetMonth>;
+}
+
+export interface NameResolver {
+  idByName(type: NameType, name: string): Promise<string>;
+}

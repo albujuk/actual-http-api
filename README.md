@@ -14,7 +14,7 @@ HTTP client ──HTTP+JSON──▶ actual-api (@actual-app/api, budget in memo
 
 ## Status
 
-The service skeleton works: config, budget loading, readiness, periodic sync and graceful shutdown. The read and write endpoints are planned but not built yet. See [Endpoints](#endpoints) and [Roadmap](#roadmap).
+The service skeleton and the read endpoints work: config, budget loading, readiness, periodic sync, graceful shutdown, and reads for accounts, balances, transactions, categories, payees, budget months and name lookup. The write endpoints are planned but not built yet. See [Endpoints](#endpoints) and [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -94,6 +94,16 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 |---|---|---|
 | `GET` | `/healthz` | `503 {"status":"starting"}` until the budget loads, then `200 {"status":"ok","budget":"<name>","lastSyncAt":"<ISO time>","lastSyncError":"<message>"}`. The sync fields are absent until the first sync or failure. It stays `200` when syncs fail |
 | `GET` | `/budgets` | Budgets on the server: `[{"syncId": "...", "name": "..."}]`. `503` until the service has connected |
+| `GET` | `/accounts` | All accounts: `[{"id","name","offbudget","closed","balance_current","account_group_id"}]` |
+| `GET` | `/accounts/:id` | One account. `404` if the id is unknown |
+| `GET` | `/accounts/:id/balance` | `{"balance": <minor units>}`. Optional `?cutoff=YYYY-MM-DD` (inclusive, defaults to today). `404` if the id is unknown |
+| `GET` | `/accounts/:id/transactions` | The account's transactions. Optional `?start=` and `?end=` (`YYYY-MM-DD`, inclusive). Splits are grouped: a parent carries its parts in `subtransactions`. `404` if the id is unknown |
+| `GET` | `/categories` | All categories, flat. Optional `?hidden=true\|false` |
+| `GET` | `/category-groups` | Category groups with their categories nested. Optional `?hidden=true\|false` |
+| `GET` | `/payees` | All payees |
+| `GET` | `/budget/months` | The months the budget covers: `["2026-01", ...]` |
+| `GET` | `/budget/:month` | Budget figures for `YYYY-MM`: totals plus budgeted, spent, balance and carryover per category. `404` for a month outside the budget |
+| `GET` | `/id?type=&name=` | `{"id": "..."}` for an exact name. `type` is `accounts`, `categories`, `payees` or `schedules`. `404` if no match |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
 
@@ -103,35 +113,29 @@ The OpenAPI spec is generated from the route schemas, so it always matches the c
 
 Errors are JSON `{"error": "<message>"}`:
 
-- `503 {"error":"not ready"}`: the service is still connecting or loading the budget.
-- `4xx`: the message says what was wrong with the request (for example `404 {"error":"not found"}`).
+- `503 {"error":"not ready"}`: the service is still connecting or loading the budget. Every budget endpoint returns it until `/healthz` is `200`.
+- `400`: the request failed schema validation (bad id, date, month or query value). The message names the field.
+- `404`: the route, or the account, month or name it refers to, does not exist (for example `{"error":"account not found"}`).
 - `500 {"error":"internal error"}`: details go to the log only, never to the client.
 
 ### Planned
 
 | Method | Path | Maps to | Notes |
 |---|---|---|---|
-| `GET` | `/accounts` | `getAccounts` | |
-| `GET` | `/accounts/:id/balance` | `getAccountBalance` | Optional `?cutoff=YYYY-MM-DD` |
-| `GET` | `/transactions/:accountId?start=&end=` | `getTransactions` | Date range is inclusive |
-| `POST` | `/transactions/:accountId/import` | `importTransactions` | Reconciles, runs rules, dedupes |
-| `POST` | `/transactions/:accountId/add` | `addTransactions` | Raw insert, no reconciliation |
+| `POST` | `/accounts/:id/transactions/import` | `importTransactions` | Reconciles, runs rules, dedupes |
+| `POST` | `/accounts/:id/transactions/add` | `addTransactions` | Raw insert, no reconciliation |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
-| `GET` | `/categories` | `getCategories` | |
-| `GET` | `/payees` | `getPayees` | |
-| `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM` |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | Body: `{ categoryId, amount }` |
 | `POST` | `/query` | `runQuery` + `q(...)` | ActualQL passthrough, limited to an allowlist of tables |
 | `POST` | `/bank-sync` | `runBankSync` | Optional body: `{ accountId }` |
-| `GET` | `/id?type=&name=` | `getIDByName` | Resolves a name to an id |
 
 ## Data conventions
 
 - **Amounts are integers in minor units** (usually cents), in both directions. `$120.30` is `12030`. Expenses are negative and income is positive. The service uses Actual's own `utils.amountToInteger` and `utils.integerToAmount` for conversion, so currencies without two decimal places round correctly.
 - **Dates are `YYYY-MM-DD` and months are `YYYY-MM`.** Clients should compute "today" in the user's timezone, not UTC.
 - **Prefer `import` over `add`.** `importTransactions` reconciles against existing transactions, runs rules (auto-categorization) and creates the other side of transfers. Send an `imported_id` with each transaction to make imports idempotent, since the same id is never added twice. Use `add` only for raw bulk loads.
-- **Split transactions** have a parent row (the total) and child rows (the parts). Filter on `is_parent: false` when summing or counting, or the totals double-count.
+- **Split transactions** have a parent row (the total) and child rows (the parts). `GET /accounts/:id/transactions` groups them: the top level holds parents and plain transactions, and each parent lists its parts in `subtransactions`. Sum the top level or the parts, never both, or the totals double-count.
 
 ## Operational constraints
 
@@ -169,12 +173,12 @@ TBD. Packaging (container image or other) is not decided yet. Whatever it ends u
 |---|---|---|---|
 | [x] | 0. Prereqs | Node 22.9+, pnpm, a reachable Actual server | `curl` the server |
 | [x] | 1. Skeleton | init, budget download, `/healthz`, `/budgets`, periodic sync, graceful shutdown | `/healthz` returns ok after warm-up |
-| [ ] | 2. Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
+| [x] | 2. Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
 | [ ] | 3. Write endpoints | import, add, update, delete, set-amount, with a write lock and sync after each write | A posted transaction appears in the Actual UI |
 | [ ] | 4. Query and bank sync | Constrained `/query`, `/bank-sync` | Only allowlisted tables are queryable |
-| [ ] | 5. Hardening | Bearer-token auth, schema validation on every route (TypeBox response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
+| [ ] | 5. Hardening | Bearer-token auth, schema validation on every route (TypeBox request and response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
 | [ ] | 6. Deploy (TBD) | Packaging and restart policy (approach not decided), persistent `DATA_DIR` | Survives a reboot |
-| [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
+| [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync, error translation, dates; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
 
 ## Project layout
 
