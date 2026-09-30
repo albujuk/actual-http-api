@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { NotFoundError, NotReadyError } from "../src/actual/errors.js";
+import { ActualApiError, NotFoundError, NotReadyError } from "../src/actual/errors.js";
 import type { Account, BudgetMonth, BudgetSummary, Transaction } from "../src/actual/types.js";
 import { buildApp } from "../src/http/app.js";
 import { accountRoutes } from "../src/http/routes/accounts.js";
@@ -58,6 +58,14 @@ const month: BudgetMonth = {
       categories: [
         { id: "c1", name: "Groceries", is_income: false, hidden: false, group_id: "g1", spent: -50, carryover: false },
       ],
+    },
+    {
+      id: "g2",
+      name: "Income",
+      is_income: true,
+      hidden: false,
+      received: 2000,
+      categories: [{ id: "c2", name: "Salary", is_income: true, hidden: false, group_id: "g2", received: 2000 }],
     },
   ],
 };
@@ -253,5 +261,42 @@ describe("read routes", () => {
   it("rejects an unknown name type or missing name with 400", async () => {
     expect((await get("/id?type=bogus&name=Shop")).statusCode).toBe(400);
     expect((await get("/id?type=payees")).statusCode).toBe(400);
+    expect((await get("/id?type=payees&name=")).statusCode).toBe(400);
+  });
+
+  it.each(["start=2026-02-30", "end=2026-9-1", "start=yesterday"])("rejects transactions query %j with 400", async (q) => {
+    const res = await get(`/accounts/a1/transactions?${q}`);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/querystring\/(start|end)/);
+  });
+
+  it("bounds the id length", async () => {
+    expect((await get(`/accounts/${"x".repeat(65)}`)).statusCode).toBe(400);
+    expect((await get(`/accounts/${"x".repeat(64)}`)).statusCode).toBe(404);
+  });
+});
+
+describe("5xx responses", () => {
+  const withPayees = (list: () => Promise<never>) => {
+    app = buildApp([payeeRoutes({ list })], { docs: false, version: "0.0.0" });
+    return app.inject({ method: "GET", url: "/payees" });
+  };
+
+  it("never send the message of an unmapped library error", async () => {
+    const res = await withPayees(() => Promise.reject(new ActualApiError("secret detail")));
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: "internal error" });
+  });
+
+  it("never send the message of a plain Error", async () => {
+    const res = await withPayees(() => Promise.reject(new Error("secret detail")));
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain("secret");
+  });
+
+  it("never send the contents of a non-Error rejection", async () => {
+    const res = await withPayees(() => Promise.reject({ type: "APIError", message: "secret detail" }));
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain("secret");
   });
 });
