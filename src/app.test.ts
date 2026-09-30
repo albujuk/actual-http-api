@@ -25,10 +25,13 @@ function build(opts: { docs?: boolean } = {}): FastifyInstance {
       healthRoutes({ loadedBudget: () => undefined }, { lastSync: () => ({}) }),
       budgetRoutes({ listBudgets: async () => [budget] }),
       accountRoutes({ list: async () => [account], get: async () => account, balance: async () => 0 }),
-      transactionRoutes({ list: async () => [transaction] }),
+      transactionRoutes(
+        { list: async () => [transaction] },
+        { import: async () => ({ added: [], updated: [] }), add: async () => {}, update: async () => {}, delete: async () => {} },
+      ),
       categoryRoutes({ list: async () => [], groups: async () => [] }),
       payeeRoutes({ list: async () => [] }),
-      budgetMonthRoutes({ months: async () => ["2026-09"], month: async () => month }),
+      budgetMonthRoutes({ months: async () => ["2026-09"], month: async () => month }, { setAmount: async () => {} }),
       idRoutes({ idByName: async () => "p1" }),
     ],
     { docs: opts.docs ?? true, version: "1.2.3", logger: false },
@@ -52,15 +55,20 @@ describe("buildApp docs", () => {
       "/accounts/{id}",
       "/accounts/{id}/balance",
       "/accounts/{id}/transactions",
+      "/accounts/{id}/transactions/add",
+      "/accounts/{id}/transactions/import",
       "/budget/months",
       "/budget/{month}",
+      "/budget/{month}/set-amount",
       "/budgets",
       "/categories",
       "/category-groups",
       "/healthz",
       "/id",
       "/payees",
+      "/transactions/{id}",
     ]);
+    expect(Object.keys(spec.paths["/transactions/{id}"]).sort()).toEqual(["delete", "patch"]);
     expect(Object.keys(spec.paths["/healthz"].get.responses)).toEqual(["200", "500", "503"]);
     expect(Object.keys(spec.paths["/accounts/{id}/balance"].get.responses).sort()).toEqual([
       "200",

@@ -1,9 +1,9 @@
 import { Type } from "typebox";
 import type { RouteModule } from "../../core/http/route-module.js";
-import { badRequest, commonErrors, notFound, notReady } from "../../core/http/schemas.js";
-import type { BudgetMonthReader } from "./budget-month-types.js";
+import { Amount, badRequest, commonErrors, IdField, invalidInput, notFound, notReady } from "../../core/http/schemas.js";
+import type { BudgetAmountWriter, BudgetMonthReader } from "./budget-month-types.js";
 
-const tag = { name: "budget", description: "Monthly budget figures" };
+const tag = { name: "budget", description: "Monthly budget figures and amounts" };
 
 const Month = Type.String({ pattern: "^\\d{4}-(0[1-9]|1[0-2])$", description: "YYYY-MM" });
 
@@ -43,7 +43,15 @@ const BudgetMonth = Type.Object({
   ),
 });
 
-export const budgetMonthRoutes = (budget: BudgetMonthReader): RouteModule => ({
+const SetAmountBody = Type.Object(
+  {
+    categoryId: IdField("Category to budget"),
+    amount: Amount("The amount budgeted for the month. Replaces the current one"),
+  },
+  { additionalProperties: false },
+);
+
+export const budgetMonthRoutes = (budget: BudgetMonthReader, writer: BudgetAmountWriter): RouteModule => ({
   tag,
   plugin: async (app) => {
     app.get(
@@ -70,6 +78,23 @@ export const budgetMonthRoutes = (budget: BudgetMonthReader): RouteModule => ({
         },
       },
       async (req) => budget.month(req.params.month),
+    );
+
+    app.post(
+      "/budget/:month/set-amount",
+      {
+        schema: {
+          tags: [tag.name],
+          summary: "Set the amount budgeted for a category in one month",
+          params: Type.Object({ month: Month }),
+          body: SetAmountBody,
+          response: { 200: Type.Object({ ok: Type.Literal(true) }), ...invalidInput, ...notFound, ...notReady, ...commonErrors },
+        },
+      },
+      async (req) => {
+        await writer.setAmount(req.params.month, req.body.categoryId, req.body.amount);
+        return { ok: true as const };
+      },
     );
   },
 });
