@@ -2,13 +2,14 @@ import { readFileSync } from "node:fs";
 import { loadConfig, type Config } from "./config.js";
 import { ActualConnection } from "./core/actual/actual-connection.js";
 import { selectBudget } from "./core/actual/budget-selection.js";
-import { BudgetSync } from "./core/actual/budget-sync.js";
+import { BudgetWriteQueue } from "./core/actual/write-queue.js";
 import { buildApp } from "./core/http/app.js";
 import { PeriodicSync } from "./core/sync/periodic-sync.js";
 import { AccountQueries } from "./features/accounts/account-queries.js";
 import { accountRoutes } from "./features/accounts/account-routes.js";
 import { BudgetMonthQueries } from "./features/budget-months/budget-month-queries.js";
 import { budgetMonthRoutes } from "./features/budget-months/budget-month-routes.js";
+import { ApiBudgetAmountWriter } from "./features/budget-months/budget-month-writer.js";
 import { budgetRoutes } from "./features/budgets/budget-routes.js";
 import { CategoryQueries } from "./features/categories/category-queries.js";
 import { categoryRoutes } from "./features/categories/category-routes.js";
@@ -19,6 +20,7 @@ import { PayeeQueries } from "./features/payees/payee-queries.js";
 import { payeeRoutes } from "./features/payees/payee-routes.js";
 import { TransactionQueries } from "./features/transactions/transaction-queries.js";
 import { transactionRoutes } from "./features/transactions/transaction-routes.js";
+import { ApiTransactionWriter } from "./features/transactions/transaction-writer.js";
 import { onShutdown } from "./lifecycle.js";
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -38,7 +40,10 @@ const connection = new ActualConnection({
   dataDir: config.dataDir,
 });
 
-const periodicSync = new PeriodicSync(new BudgetSync(connection), config.syncIntervalMs, (err) =>
+// Writes and periodic syncs share one queue, so they never interleave.
+const writes = new BudgetWriteQueue(connection, (err) => app.log.error(err, "sync after write failed"));
+
+const periodicSync = new PeriodicSync(writes, config.syncIntervalMs, (err) =>
   app.log.error(err, "periodic sync failed"),
 );
 
@@ -46,16 +51,22 @@ const periodicSync = new PeriodicSync(new BudgetSync(connection), config.syncInt
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
 const accounts = new AccountQueries(connection);
+const categories = new CategoryQueries(connection);
+const payees = new PayeeQueries(connection);
+const budgetMonths = new BudgetMonthQueries(connection);
 
 const app = buildApp(
   [
     healthRoutes(connection, periodicSync),
     budgetRoutes(connection),
     accountRoutes(accounts),
-    transactionRoutes(new TransactionQueries(connection, accounts)),
-    categoryRoutes(new CategoryQueries(connection)),
-    payeeRoutes(new PayeeQueries(connection)),
-    budgetMonthRoutes(new BudgetMonthQueries(connection)),
+    transactionRoutes(
+      new TransactionQueries(connection, accounts),
+      new ApiTransactionWriter(writes, accounts, categories, payees),
+    ),
+    categoryRoutes(categories),
+    payeeRoutes(payees),
+    budgetMonthRoutes(budgetMonths, new ApiBudgetAmountWriter(writes, budgetMonths, categories)),
     idRoutes(new ApiNameResolver(connection)),
   ],
   { docs: config.docsEnabled, version },
@@ -70,7 +81,9 @@ onShutdown(
     // connect/download can't be cancelled; wait for the current step, bounded by the timeout.
     await startup;
     await periodicSync.stop();
+    // Waits for in-flight requests, then the queue settles any write they left behind.
     await app.close();
+    await writes.close();
     await connection.close();
   },
   { onError: (err) => app.log.error(err, "shutdown failed"), timeoutMs: SHUTDOWN_TIMEOUT_MS },

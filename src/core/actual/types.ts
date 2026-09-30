@@ -20,3 +20,8 @@ export interface Connection {
 export interface BudgetLoader {
   load(budget: BudgetSummary): Promise<void>;
 }
+
+// Runs budget writes one at a time, each followed by a sync.
+export interface WriteQueue {
+  write<T>(fn: () => Promise<T>): Promise<T>;
+}

@@ -14,7 +14,7 @@ HTTP client ──HTTP+JSON──▶ actual-api (@actual-app/api, budget in memo
 
 ## Status
 
-The service skeleton and the read endpoints work: config, budget loading, readiness, periodic sync, graceful shutdown, and reads for accounts, balances, transactions, categories, payees, budget months and name lookup. The write endpoints are planned but not built yet. See [Endpoints](#endpoints) and [Roadmap](#roadmap).
+The service skeleton, the read endpoints and the write endpoints work: config, budget loading, readiness, periodic sync, graceful shutdown, reads for accounts, balances, transactions, categories, payees, budget months and name lookup, and writes for transactions and budget amounts. `/query` and `/bank-sync` are planned but not built yet. See [Endpoints](#endpoints) and [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -80,9 +80,9 @@ Only budgets that exist on the server count. Stale copies in the local cache are
 
 1. **Boot.** The service reads config from the environment and starts listening. `/healthz` returns `503` at this point.
 2. **Init.** It calls `api.init()`, picks a budget, and runs `api.downloadBudget()`. This is slow, since it needs the network and a full database load. It runs once. When it finishes, `/healthz` returns `200`.
-3. **Serve.** It handles requests against the in-memory budget.
-4. **Periodic sync.** It calls `api.sync()` `SYNC_INTERVAL_MS` after the previous sync finishes, so syncs never overlap. The service picks up changes from other devices and bank sync even when it receives no writes. A failed sync is logged and reported in `/healthz` as `lastSyncError`, and the next one is still scheduled.
-5. **Shutdown.** On `SIGTERM` or `SIGINT`, it waits for any in-progress start-up step, stops the timer and waits for a running sync, closes the HTTP server, runs a final `api.sync()`, and then calls `api.shutdown()`. Skipping this step can lose the last write or corrupt the cache. An unhandled error triggers the same shutdown and exits with code 1. If shutdown takes longer than 10 seconds, the process exits with code 1.
+3. **Serve.** It handles requests against the in-memory budget. Reads run directly. Writes run one at a time through a queue, and each ends with `api.sync()`.
+4. **Periodic sync.** It calls `api.sync()` `SYNC_INTERVAL_MS` after the previous sync finishes, so syncs never overlap. Periodic syncs go through the same queue as writes, so a sync never runs in the middle of a write. The service picks up changes from other devices and bank sync even when it receives no writes. A failed sync is logged and reported in `/healthz` as `lastSyncError`, and the next one is still scheduled.
+5. **Shutdown.** On `SIGTERM` or `SIGINT`, it waits for any in-progress start-up step, stops the timer and waits for a running sync, closes the HTTP server (in-flight requests finish), waits for queued writes, runs a final `api.sync()`, and then calls `api.shutdown()`. Skipping this step can lose the last write or corrupt the cache. An unhandled error triggers the same shutdown and exits with code 1. If shutdown takes longer than 10 seconds, the process exits with code 1.
 
 Any failure during start-up exits the process with code 1. Let a supervisor (for example systemd) restart it rather than running with a half-loaded budget.
 
@@ -103,30 +103,45 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 | `GET` | `/payees` | All payees |
 | `GET` | `/budget/months` | The months the budget covers: `["2026-01", ...]` |
 | `GET` | `/budget/:month` | Budget figures for `YYYY-MM`: totals plus budgeted, spent, balance and carryover per category. `404` for a month outside the budget |
+| `POST` | `/budget/:month/set-amount` | Body `{"categoryId","amount"}`. Sets the amount budgeted for that category in `YYYY-MM`, replacing the current one. `{"ok":true}`. `404` for a month outside the budget, `400` for an unknown category |
+| `POST` | `/accounts/:id/transactions/import` | Body `{"transactions":[...],"opts":{"defaultCleared","dryRun"}}`. Reconciles against existing transactions, runs rules and creates the other side of transfers. Returns `{"added":[ids],"updated":[ids]}`. `dryRun` reports without writing |
+| `POST` | `/accounts/:id/transactions/add` | Body `{"transactions":[...],"opts":{"runTransfers","learnCategories"}}` (both default `false`). Inserts as-is, no reconciliation, so a retry adds duplicates. `{"ok":true}` |
+| `PATCH` | `/transactions/:id` | Body with any of `account`, `date`, `amount`, `payee`, `category`, `notes`, `cleared`. `null` clears `payee`, `category` or `notes`. `{"ok":true}`. `404` for an unknown transaction |
+| `DELETE` | `/transactions/:id` | Deletes the transaction. Deleting a split parent deletes its parts. `{"ok":true}`. `404` for an unknown transaction |
 | `GET` | `/id?type=&name=` | `{"id": "..."}` for an exact name. `type` is `accounts`, `categories`, `payees` or `schedules`. `404` if no match |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
 
 The OpenAPI spec is generated from the route schemas, so it always matches the code. Responses are serialized through the same schemas, so fields a schema doesn't declare are never sent.
 
+### Writing transactions
+
+A new transaction (for `import` and `add`) takes `date` (`YYYY-MM-DD`) and `amount` (integer minor units), plus optional `payee` (an existing payee id), `payee_name` (matches a payee by name or creates one; `payee` wins), `imported_payee`, `category`, `notes`, `imported_id`, `cleared` and `subtransactions` (`[{"amount","category","notes"}]`, which makes a split). One request takes 1 to 1000 transactions.
+
+```sh
+curl -X POST http://127.0.0.1:3001/accounts/$ACCOUNT_ID/transactions/import \
+  -H 'content-type: application/json' \
+  -d '{"transactions":[{"date":"2026-09-30","amount":-450,"payee_name":"Cafe","imported_id":"bank-123"}]}'
+# {"added":["..."],"updated":[]}
+```
+
+Request bodies are strict: fields the schema doesn't declare are dropped before they reach Actual. Every account, payee and category id in a body must exist, or the request fails with `400` and nothing is written.
+
+A write that succeeds locally stays successful even if the sync after it fails (for example, the Actual server is briefly down). The failure is logged, and the next sync sends the change. So a client never retries a write that already happened.
+
 ### Errors
 
 Errors are JSON `{"error": "<message>"}`:
 
 - `503 {"error":"not ready"}`: the service is still connecting or loading the budget. Every budget endpoint returns it until `/healthz` is `200`.
-- `400`: the request failed schema validation (bad id, date, month or query value). The message names the field.
-- `404`: the route, or the account, month or name it refers to, does not exist (for example `{"error":"account not found"}`).
+- `400`: the request failed schema validation (bad id, date, month, amount, query value or body field; the message names the field), or a write body refers to an id that does not exist (for example `{"error":"unknown category: <id>"}`).
+- `404`: the route, or the account, transaction, month or name in its path or query, does not exist (for example `{"error":"account not found"}`).
 - `500 {"error":"internal error"}`: details go to the log only, never to the client.
 
 ### Planned
 
 | Method | Path | Maps to | Notes |
 |---|---|---|---|
-| `POST` | `/accounts/:id/transactions/import` | `importTransactions` | Reconciles, runs rules, dedupes |
-| `POST` | `/accounts/:id/transactions/add` | `addTransactions` | Raw insert, no reconciliation |
-| `PATCH` | `/transactions/:id` | `updateTransaction` | |
-| `DELETE` | `/transactions/:id` | `deleteTransaction` | |
-| `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | Body: `{ categoryId, amount }` |
 | `POST` | `/query` | `runQuery` + `q(...)` | ActualQL passthrough, limited to an allowlist of tables |
 | `POST` | `/bank-sync` | `runBankSync` | Optional body: `{ accountId }` |
 
@@ -140,7 +155,7 @@ Errors are JSON `{"error": "<message>"}`:
 ## Operational constraints
 
 - **Run one instance per budget.** The service mutates a local SQLite copy and syncs it. Two replicas against the same budget would diverge and cause sync conflicts.
-- **Writes are serialized.** Every mutating endpoint will run behind an async mutex and end with `api.sync()`, so concurrent requests can't interleave.
+- **Writes are serialized.** Every mutating endpoint runs through one queue, together with the periodic sync, and ends with `api.sync()`, so concurrent requests can't interleave.
 - **Persist `DATA_DIR`.** Without a persistent volume, every restart downloads the whole budget again.
 - **Pin `@actual-app/api`.** ActualQL is mostly undocumented upstream and changes between releases. Re-check the `q(...)` builder methods after every upgrade.
 
@@ -174,11 +189,11 @@ TBD. Packaging (container image or other) is not decided yet. Whatever it ends u
 | [x] | 0. Prereqs | Node 22.9+, pnpm, a reachable Actual server | `curl` the server |
 | [x] | 1. Skeleton | init, budget download, `/healthz`, `/budgets`, periodic sync, graceful shutdown | `/healthz` returns ok after warm-up |
 | [x] | 2. Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
-| [ ] | 3. Write endpoints | import, add, update, delete, set-amount, with a write lock and sync after each write | A posted transaction appears in the Actual UI |
+| [x] | 3. Write endpoints | import, add, update, delete, set-amount, with a write lock and sync after each write | A posted transaction appears in the Actual UI |
 | [ ] | 4. Query and bank sync | Constrained `/query`, `/bank-sync` | Only allowlisted tables are queryable |
 | [ ] | 5. Hardening | Bearer-token auth, schema validation on every route (TypeBox request and response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
 | [ ] | 6. Deploy (TBD) | Packaging and restart policy (approach not decided), persistent `DATA_DIR` | Survives a reboot |
-| [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync, error translation, dates; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
+| [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync, the write queue, error translation, dates and write validation; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
 
 ## Project layout
 
@@ -187,8 +202,8 @@ src/
   main.ts        composition root: wires the modules, runs start-up and shutdown
   config.ts      environment → validated, typed config
   lifecycle.ts   process signals and fatal errors → one graceful shutdown
-  core/          shared infrastructure: Actual connection and error translation,
-                 Fastify app setup and error mapping, background sync
+  core/          shared infrastructure: Actual connection, error translation and the
+                 write queue, Fastify app setup and error mapping, background sync
   features/      one folder per resource (accounts, transactions, …): its types,
                  budget access, HTTP routes and tests together
 test/support/    shared test helpers (tests sit next to the code as *.test.ts)
