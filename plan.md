@@ -284,6 +284,8 @@ start().catch((e) => {
 
 ## 3. Build stages (roadmap)
 
+Semver, with the HTTP API (paths, request/response shapes, status codes, error format) and the env vars as the public contract. 1.0.0 = stages 0–3. Stages 4–7 are additive and ship as 1.x minor/patch releases; anything that breaks existing clients waits for 2.0. That is why auth is opt-in: making it mandatory would be a breaking change.
+
 | Done | Stage | Goal | Done when |
 |---|---|---|---|
 | [x] | 0 — Prereqs | Node 22.9+, pnpm, Actual server reachable | `curl` the server, `pnpm add @actual-app/api fastify` |
@@ -291,7 +293,7 @@ start().catch((e) => {
 | [x] | 2 — Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
 | [x] | 3 — Write endpoints | import, add, update, delete, set-amount, with write lock + sync after each write (`BudgetWrites` under a `SerialExecutor` lock shared with the periodic `BudgetSync`; every id in a write is checked first: unknown path target `404`, unknown body reference `400`) | a posted txn appears in the Actual UI |
 | [ ] | 4 — Query + bank sync | constrained `/query`, `/bank-sync` | allowlisted tables only |
-| [ ] | 5 — Hardening | bearer-token auth, schema validation on every route (TypeBox schemas feed validation, serialization and the OpenAPI spec; request and response schemas done for existing routes), central error handler (basic version done: `NotReadyError` → 503, `NotFoundError` → 404, validation and `InvalidInputError` → 400, library `APIError` objects translated in `core/actual/`, generic 500), no secrets in logs | security checklist met |
+| [ ] | 5 — Hardening | optional bearer-token auth (checked only when `BRIDGE_TOKEN` is set; unset = no auth), schema validation on every route (TypeBox schemas feed validation, serialization and the OpenAPI spec; request and response schemas done for existing routes), central error handler (basic version done: `NotReadyError` → 503, `NotFoundError` → 404, validation and `InvalidInputError` → 400, library `APIError` objects translated in `core/actual/`, generic 500), no secrets in logs | security checklist met |
 | [ ] | 6 — Deploy (TBD) | packaging and restart policy (approach not decided), persistent `DATA_DIR` | survives a reboot |
 | [ ] | 7 — Tests + observability | unit tests (budget selection, amounts), smoke test against a throwaway budget, structured logs | green CI (partial: Vitest unit tests for config, budget selection, periodic sync, the serial executor, budget writes and syncs, error translation, dates, budget-month mapping and writer id checks, plus `app.inject` route tests; pino-only logs) |
 
@@ -304,7 +306,7 @@ TBD. Packaging (container image or other) is not decided yet. Requirements for w
 - Exactly one bridge instance per budget.
 - A supervisor restarts the process on exit, since start-up failures exit non-zero.
 - `DATA_DIR` lives on persistent storage, so restarts don't re-download the budget.
-- The port stays on a private network, never published to the internet. Only clients on that network reach it, and only with the shared token.
+- The port stays on a private network, never published to the internet. Only clients on that network reach it, and only with the shared token when `BRIDGE_TOKEN` is set.
 - Clients wait for `GET /healthz` to return `200` before sending requests.
 
 ---
@@ -313,7 +315,7 @@ TBD. Packaging (container image or other) is not decided yet. Requirements for w
 
 1. **Secrets via env, never in code or git.** Server password, bridge token, E2E password. Keep `.env` out of version control, or use a secrets manager.
 2. **The bridge is privileged — isolate it.** It can read and rewrite the entire budget. Bind it to localhost / a private network, never expose its port publicly. Treat it like a database, not a public API.
-3. **Authenticate callers.** A shared bearer token (`BRIDGE_TOKEN`, every route except `/healthz`) is the minimum. Across hosts, put it behind TLS (reverse proxy) or mTLS. A token over plaintext on an untrusted network is not enough.
+3. **Authenticate callers.** A shared bearer token (`BRIDGE_TOKEN`, every route except `/healthz`) is the minimum. It is optional: unset means no auth, and the bridge relies on network isolation alone. Set it whenever clients on the network aren't all trusted. Across hosts, put it behind TLS (reverse proxy) or mTLS. A token over plaintext on an untrusted network is not enough.
 4. **Validate input.** Fastify schemas on every route: strict types, integer amounts, date formats, sane ranges. JSON (not SQL) keeps injection risk low, but garbage should be rejected before it hits the ledger.
 5. **TLS to the Actual server.** For self-signed / custom CA certs, prefer `NODE_EXTRA_CA_CERTS`. Avoid `NODE_TLS_REJECT_UNAUTHORIZED=0` except on a fully trusted network — it disables all verification.
 6. **Rate limiting.** Consider a limiter on the bridge to protect against floods and Actual's own rate limiting.
@@ -355,4 +357,4 @@ TBD. Packaging (container image or other) is not decided yet. Requirements for w
 - Use `importTransactions` (reconciles, runs rules, makes transfers) for user input; `addTransactions` only for raw bulk.
 - Always pass `imported_id` for dedupe.
 - One bridge instance, budget loaded once, writes serialized, sync after writes + on a timer, graceful shutdown.
-- Bridge is private and token-authed.
+- Bridge is private, and token-authed when `BRIDGE_TOKEN` is set.

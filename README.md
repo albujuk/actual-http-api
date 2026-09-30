@@ -20,7 +20,7 @@ flowchart LR
 
 ## Status
 
-The service skeleton, the read endpoints and the write endpoints work: config, budget loading, readiness, periodic sync, graceful shutdown, reads for accounts, balances, transactions, categories, payees, budget months and name lookup, and writes for transactions and budget amounts. `/query` and `/bank-sync` are planned but not built yet. See [Endpoints](#endpoints) and [Roadmap](#roadmap).
+Version 1.0.0. The service skeleton, the read endpoints and the write endpoints work: config, budget loading, readiness, periodic sync, graceful shutdown, reads for accounts, balances, transactions, categories, payees, budget months and name lookup, and writes for transactions and budget amounts. `/query`, `/bank-sync` and optional bearer-token auth are planned for later 1.x releases. See [Endpoints](#endpoints) and [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -170,7 +170,7 @@ Errors are JSON `{"error": "<message>"}`:
 This service can read and rewrite your entire budget. Treat it like a database, not a public API.
 
 - **Keep it private.** It binds to `127.0.0.1` by default. Never publish its port to the internet.
-- **Authenticate callers.** A shared bearer token (`BRIDGE_TOKEN`, checked on every route except `/healthz`) is planned. Until it ships, rely on network isolation alone. The `/docs` routes describe the API but return no budget data. They are off in production unless `DOCS_ENABLED=true`.
+- **Authenticate callers.** An optional shared bearer token (`BRIDGE_TOKEN`) is planned for a 1.x release. When set, it will be checked on every route except `/healthz`. When unset, there is no auth. Until it ships, or while it is unset, rely on network isolation alone. The `/docs` routes describe the API but return no budget data. They are off in production unless `DOCS_ENABLED=true`.
 - **Use TLS across hosts.** If clients run on another host, put the service behind a TLS reverse proxy, or use mTLS.
 - **Keep secrets in the environment, never in git.** This covers the server password and the bridge token. `.env` is gitignored.
 - **Verify TLS to the Actual server.** For self-signed or private CA certificates, set `NODE_EXTRA_CA_CERTS`. Do not use `NODE_TLS_REJECT_UNAUTHORIZED=0` outside a fully trusted network, because it turns off all certificate verification.
@@ -190,6 +190,8 @@ TBD. Packaging (container image or other) is not decided yet. Whatever it ends u
 
 ## Roadmap
 
+The project follows [semantic versioning](https://semver.org/). The public contract is the HTTP API (paths, request and response shapes, status codes, the error format) and the environment variables. 1.0.0 covers stages 0 to 3. The remaining stages are additive and ship as 1.x minor or patch releases. Anything that breaks existing clients waits for 2.0.
+
 | Done | Stage | Goal | Done when |
 |---|---|---|---|
 | [x] | 0. Prereqs | Node 22.9+, pnpm, a reachable Actual server | `curl` the server |
@@ -197,7 +199,7 @@ TBD. Packaging (container image or other) is not decided yet. Whatever it ends u
 | [x] | 2. Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
 | [x] | 3. Write endpoints | import, add, update, delete, set-amount, with a write lock and sync after each write | A posted transaction appears in the Actual UI |
 | [ ] | 4. Query and bank sync | Constrained `/query`, `/bank-sync` | Only allowlisted tables are queryable |
-| [ ] | 5. Hardening | Bearer-token auth, schema validation on every route (TypeBox request and response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
+| [ ] | 5. Hardening | Optional bearer-token auth (only when `BRIDGE_TOKEN` is set), schema validation on every route (TypeBox request and response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
 | [ ] | 6. Deploy (TBD) | Packaging and restart policy (approach not decided), persistent `DATA_DIR` | Survives a reboot |
 | [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync, the write lock, budget writes and syncs, error translation, dates and write validation; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
 

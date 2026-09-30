@@ -92,6 +92,8 @@ Conventions to keep:
 - Writes: every write route calls a writer, which runs its checks and the library call inside `BudgetWrites.write()`, then `api.sync()`, all under the one `SerialExecutor` lock. The periodic sync (`BudgetSync`) takes the same lock, so a sync never runs mid-write. If the sync after a write fails, the write still succeeds (it is in the local copy, the next sync sends it); the error goes to `onSyncError` (logged).
 - Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server (waits for in-flight requests), `await lock.close()` (drains the `SerialExecutor`, new writes and syncs get 503), then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
 
+Version 1.0.0 = roadmap stages 0–3. Semver: the HTTP API and env vars are the contract, so later stages must be additive (1.x); a breaking change waits for 2.0.
+
 Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, `GET /payees`, `GET /budget/months`, `GET /budget/:month`, `POST /budget/:month/set-amount`, `POST /accounts/:id/transactions/import`, `POST /accounts/:id/transactions/add`, `PATCH /transactions/:id`, `DELETE /transactions/:id`, `GET /id?type=&name=`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
 
 ## Config (env)
@@ -117,7 +119,7 @@ Empty strings count as unset. Invalid values stop start-up with a one-line error
 - Money is integer minor units (expenses negative). Dates are `YYYY-MM-DD` and months are `YYYY-MM`. Use `utils.amountToInteger` rather than hand-rolled rounding.
 - Prefer `importTransactions` (it reconciles, runs rules and dedupes by `imported_id`) over `addTransactions` for user input.
 - Account-scoped routes nest under `/accounts/:id/…` (including `…/transactions/import|add`), so `/transactions/:id` always means a transaction id.
-- Not built yet: `/query` and `/bank-sync` (Stage 4), bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, exempting `/healthz`; how `/docs` is handled is an open decision in plan.md), end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
+- Not built yet: `/query` and `/bank-sync` (Stage 4), optional bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, skipped entirely when unset, exempting `/healthz`; how `/docs` is handled is an open decision in plan.md), end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
 
 ## Rules
 
