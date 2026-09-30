@@ -1,8 +1,11 @@
+import { readFileSync } from "node:fs";
 import { loadConfig, type Config } from "./config.js";
 import { ActualConnection } from "./actual/actual-connection.js";
 import { selectBudget } from "./actual/budget-selection.js";
 import { BudgetSync } from "./actual/budget-sync.js";
 import { buildApp } from "./http/app.js";
+import { budgetRoutes } from "./http/routes/budgets.js";
+import { healthRoutes } from "./http/routes/health.js";
 import { onShutdown } from "./lifecycle.js";
 import { PeriodicSync } from "./sync/periodic-sync.js";
 
@@ -27,7 +30,13 @@ const periodicSync = new PeriodicSync(new BudgetSync(connection), config.syncInt
   app.log.error(err, "periodic sync failed"),
 );
 
-const app = buildApp({ status: connection, catalog: connection, sync: periodicSync });
+// package.json sits one level above both src/ and dist/.
+const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+
+const app = buildApp([healthRoutes(connection, periodicSync), budgetRoutes(connection)], {
+  docs: config.docsEnabled,
+  version,
+});
 
 const shutdown = new AbortController();
 const startup = start(shutdown.signal);
