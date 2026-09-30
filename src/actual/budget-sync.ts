@@ -1,5 +1,5 @@
 import * as api from "@actual-app/api";
-import { NotReadyError } from "./errors.js";
+import { requireLoaded } from "./guard.js";
 import type { BudgetStatus, Syncable } from "./types.js";
 
 export class BudgetSync implements Syncable {
@@ -10,7 +10,7 @@ export class BudgetSync implements Syncable {
   }
 
   async sync(): Promise<void> {
-    if (!this.#status.loadedBudget()) throw new NotReadyError("no budget loaded");
+    requireLoaded(this.#status);
     await api.sync();
   }
 }

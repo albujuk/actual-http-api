@@ -34,7 +34,10 @@ src/
   lifecycle.ts             onShutdown(): runs once on SIGTERM/SIGINT or a fatal error, bounded by a timeout
   actual/
     types.ts               narrow interfaces: Connection, BudgetLoader, BudgetCatalog, BudgetStatus, Syncable
-    errors.ts              NotReadyError (mapped to 503)
+    errors.ts              NotReadyError (503), NotFoundError (404), ActualApiError (unmapped library error, 500)
+    api-errors.ts          pure translateApiError() + callApi(): library APIError objects -> typed errors
+    guard.ts               requireLoaded(status): throws NotReadyError before the budget loads
+    dates.ts               pure parseDay(): YYYY-MM-DD -> local-midnight Date
     actual-connection.ts   ActualConnection: init/shutdown, list budgets, load one. One per process
     budget-sync.ts         BudgetSync: Syncable capability, guarded by BudgetStatus
     budget-selection.ts    pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
@@ -42,7 +45,8 @@ src/
     app.ts                 buildApp(modules, options): creates Fastify, error handlers, docs, then each module's plugin. Knows no concrete route
     route-module.ts        RouteModule { tag, plugin }: the abstraction app.ts and docs depend on
     docs.ts                registerDocs(): @fastify/swagger + Swagger UI at /docs, tags from the modules. Registers before routes
-    schemas.ts             cross-cutting TypeBox schemas only (ErrorResponse, commonErrors)
+    schemas.ts             cross-cutting TypeBox schemas only (ErrorResponse, commonErrors, badRequest, notFound,
+                           notReady, Id/IdParams, Day(description))
     error-handler.ts       JSON { error } responses; 5xx never carry the raw message
     routes/*.ts            each route file is a factory (deps) => RouteModule, owning its schemas and OpenAPI tag
   sync/
@@ -90,7 +94,7 @@ Empty strings count as unset. Invalid values stop start-up with a one-line error
 - **Serialize writes** behind an async mutex, and `sync()` after each write.
 - Money is integer minor units (expenses negative). Dates are `YYYY-MM-DD` and months are `YYYY-MM`. Use `utils.amountToInteger` rather than hand-rolled rounding.
 - Prefer `importTransactions` (it reconciles, runs rules and dedupes by `imported_id`) over `addTransactions` for user input.
-- Not built yet: bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, exempting `/healthz`; how `/docs` is handled is an open decision in plan.md), read and write endpoints, request schemas (`params`, `querystring`, `body`) for those endpoints, mapping of `@actual-app/api` errors in the central error handler (it only knows `NotReadyError` so far), end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
+- Not built yet: bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, exempting `/healthz`; how `/docs` is handled is an open decision in plan.md), read and write endpoints, request schemas (`params`, `querystring`, `body`) for those endpoints, end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
 
 ## Rules
 
@@ -101,6 +105,8 @@ Each rule guards against a bug class found in review. Follow them in every chang
 - **Shutdown awaits all in-flight work before `connection.close()`.** That covers start-up steps, syncs and, later, writes behind the mutex. Start-up checks the abort signal between steps. Every exit goes through `lifecycle.ts` and stays bounded by the timeout. Don't call `process.exit` anywhere else, except for config and start-up failures in `main.ts`.
 - **Never send a raw `err.message` in a 5xx response.** Throw typed errors and let `http/error-handler.ts` map them. A capability used before the connection or budget is ready throws `NotReadyError` (503), never a plain `Error`. New error types get a mapping there.
 - **Custom error classes set `this.name`.**
+- **Wrap every `@actual-app/api` call in `callApi`.** The library rejects with plain objects, not `Error`s, so an unwrapped call reaches Fastify as a non-Error. Known messages map to `NotFoundError`; the rest become `ActualApiError` (500).
+- **Don't spread a TypeBox schema into `Type.Optional`** (`Type.Optional({ ...Day, description })` puts `~optional` into the JSON schema and ajv strict mode fails at boot). Use a factory like `Day(description)`.
 - **Log through pino only.** No `console.*`. The one exception is the config error in `main.ts`, before the logger exists. `@actual-app/api` runs with `verbose: false`. Never log config values, passwords or unredacted request headers.
 - **Keep docs in sync in the same change.** A new or changed env var, default, endpoint, response shape, error format or roadmap stage updates `.env.example`, README.md, CLAUDE.md and plan.md together. Defaults in `.env.example` and in the docs match the code.
 - **`engines.node` must cover every Node flag and API** used in scripts and code (`--env-file-if-exists` needs 22.9).
@@ -110,3 +116,4 @@ Each rule guards against a bug class found in review. Follow them in every chang
   - `getBudgets()` returns local cache folders (no `state`) plus remote files (`state: "remote"`, deleted files excluded).
   - `shutdown()` syncs but swallows errors.
   - `init()` logs to the console unless you pass `verbose: false`.
+  - Errors are plain objects `{ type: "APIError", message, meta }`, e.g. `"Not found: payees with name X"` (`getIDByName`), `"No budget exists for month: …"` (`getBudgetMonth`).

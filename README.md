@@ -103,8 +103,9 @@ The OpenAPI spec is generated from the route schemas, so it always matches the c
 
 Errors are JSON `{"error": "<message>"}`:
 
-- `503 {"error":"not ready"}`: the service is still connecting or loading the budget.
-- `4xx`: the message says what was wrong with the request (for example `404 {"error":"not found"}`).
+- `503 {"error":"not ready"}`: the service is still connecting or loading the budget. Every budget endpoint returns it until `/healthz` is `200`.
+- `400`: the request failed schema validation (bad id, date, month or query value). The message names the field.
+- `404`: the route, or the account, month or name it refers to, does not exist (for example `{"error":"account not found"}`).
 - `500 {"error":"internal error"}`: details go to the log only, never to the client.
 
 ### Planned

@@ -1,10 +1,14 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
-import { NotReadyError } from "../actual/errors.js";
+import { NotFoundError, NotReadyError } from "../actual/errors.js";
 
 // Maps errors to JSON { error }. 5xx responses never carry the raw message.
 export function errorHandler(err: FastifyError, req: FastifyRequest, reply: FastifyReply): void {
   if (err instanceof NotReadyError) {
     reply.code(503).send({ error: "not ready" });
+    return;
+  }
+  if (err instanceof NotFoundError) {
+    reply.code(404).send({ error: err.message });
     return;
   }
   const status = err.statusCode ?? 500;
