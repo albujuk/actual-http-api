@@ -9,6 +9,7 @@ import { AccountQueries } from "./features/accounts/account-queries.js";
 import { accountRoutes } from "./features/accounts/account-routes.js";
 import { BudgetMonthQueries } from "./features/budget-months/budget-month-queries.js";
 import { budgetMonthRoutes } from "./features/budget-months/budget-month-routes.js";
+import { ApiBudgetAmountWriter } from "./features/budget-months/budget-month-writer.js";
 import { budgetRoutes } from "./features/budgets/budget-routes.js";
 import { CategoryQueries } from "./features/categories/category-queries.js";
 import { categoryRoutes } from "./features/categories/category-routes.js";
@@ -52,6 +53,7 @@ const { version } = JSON.parse(readFileSync(new URL("../package.json", import.me
 const accounts = new AccountQueries(connection);
 const categories = new CategoryQueries(connection);
 const payees = new PayeeQueries(connection);
+const budgetMonths = new BudgetMonthQueries(connection);
 
 const app = buildApp(
   [
@@ -64,7 +66,7 @@ const app = buildApp(
     ),
     categoryRoutes(categories),
     payeeRoutes(payees),
-    budgetMonthRoutes(new BudgetMonthQueries(connection)),
+    budgetMonthRoutes(budgetMonths, new ApiBudgetAmountWriter(writes, budgetMonths, categories)),
     idRoutes(new ApiNameResolver(connection)),
   ],
   { docs: config.docsEnabled, version },

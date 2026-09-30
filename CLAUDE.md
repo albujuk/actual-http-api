@@ -60,9 +60,9 @@ src/
     <name>-types.ts        the feature's data types + its narrow reader interface (AccountReader, ...)
     <name>-queries.ts      read capability class (AccountQueries, ...), guarded by BudgetStatus, library calls in callApi
                            (ids: name-resolver.ts, ApiNameResolver over getIDByName)
-    <name>-writer.ts       (transactions) write capability class (ApiTransactionWriter): takes the WriteQueue plus
-                           readers, checks ids inside the queue and throws NotFoundError (path) or
-                           InvalidInputError (body) before writing
+    <name>-writer.ts       (transactions, budget-months) write capability class (ApiTransactionWriter,
+                           ApiBudgetAmountWriter): takes the WriteQueue plus readers, checks ids inside the queue
+                           and throws NotFoundError (path) or InvalidInputError (body) before writing
     <name>-routes.ts       factory (deps) => RouteModule, owning its TypeBox schemas and OpenAPI tag
     budget-month.ts        (budget-months only) pure toBudgetMonth(): normalizes carryover cells to booleans
     *.test.ts              the feature's tests, next to the code
@@ -75,9 +75,9 @@ Conventions to keep:
 - **Depend on the narrowest interface.** Routes and `PeriodicSync` take `BudgetStatus`, `BudgetCatalog` or `Syncable`, never `ActualConnection`. For a new capability, add an interface in the feature's `<name>-types.ts` and implement it in a **new class** in that feature folder (like `AccountQueries`: it takes `BudgetStatus` and throws if no budget is loaded). Connection-level capabilities (like `BudgetWriteQueue`) go in `core/actual/`. Write capabilities take the `WriteQueue`, never the connection, and run all their checks and library calls inside one `queue.write()`. Do not grow `ActualConnection`, which only owns connection and budget-load state. Inject the capability into a new route factory registered in `buildApp`.
 - **Import `@actual-app/api` only in `core/actual/` and in a feature's capability classes** (`*-queries.ts`, `name-resolver.ts`, `*-writer.ts`). Route files never import it. The library is a process-wide singleton, so the `ActualConnection` constructor throws on a second instance. Budget selection policy lives in the composition root, not in `core/actual/`. Keep pure logic, such as `selectBudget`, in its own side-effect-free functions.
 - **Add a resource as a new `features/<name>/` folder** with its types, capability class, `<name>-routes.ts` returning a `RouteModule`, and tests. Add the module to the `buildApp([...])` list in `main.ts` and its path and tag to the spec test in `src/app.test.ts`. Nothing in `core/` changes: `app.ts`, `docs.ts` and `schemas.ts` stay untouched. The module keeps its TypeBox schemas and its tag in its own file; only schemas used by several modules go in `schemas.ts`.
-- **Dependency direction: features import `core/`, `core/` never imports a feature.** Between features only `import type` is allowed (transactions uses `AccountReader`, `CategoryReader` and `PayeeReader`, budget-months uses `Category`). All runtime wiring stays in `main.ts`. No `index.ts` barrels: import modules directly.
-- **Write bodies are objects with `additionalProperties: false`**, so Fastify strips unknown fields before the handler (it strips, it doesn't reject). Amounts use `Amount(...)`. Fastify coerces types, so in a nullable union put `Type.Null()` first, or `null` becomes `""`. `minProperties` counts fields before stripping, so a handler that needs a non-empty body checks after. Writes answer `{ ok: true }` unless the library returns something useful (import returns `{ added, updated }`).
+- **Dependency direction: features import `core/`, `core/` never imports a feature.** Between features only `import type` is allowed (transactions uses `AccountReader`, `CategoryReader` and `PayeeReader`, budget-months uses `Category` and `CategoryReader`). All runtime wiring stays in `main.ts`. No `index.ts` barrels: import modules directly.
 - **Every route declares a TypeBox `schema`** with `tags: [tag.name]`, `summary`, and a `response` entry for each status it can send, spreading `commonErrors`. Undeclared response fields are dropped by serialization.
+- **Write bodies are objects with `additionalProperties: false`**, so Fastify strips unknown fields before the handler (it strips, it doesn't reject). Amounts use `Amount(...)`. Fastify coerces types, so in a nullable union put `Type.Null()` first, or `null` becomes `""`. `minProperties` counts fields before stripping, so a handler that needs a non-empty body checks after. Writes answer `{ ok: true }` unless the library returns something useful (import returns `{ added, updated }`).
 - Private state uses `#fields`. Timers and errors go through injected `onError` callbacks, which wire to `app.log`.
 
 ## Runtime behavior
@@ -88,7 +88,7 @@ Conventions to keep:
 - Writes: every write route calls a writer, which runs its checks and the library call inside `BudgetWriteQueue.write()`, then `api.sync()`. The periodic sync runs through the same queue. If the sync after a write fails, the write still succeeds (it is in the local copy, the next sync sends it); the error goes to `onSyncError` (logged).
 - Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server (waits for in-flight requests), `await writes.close()` (drains the queue, new writes get 503), then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
 
-Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, `GET /payees`, `GET /budget/months`, `GET /budget/:month`, `POST /accounts/:id/transactions/import`, `POST /accounts/:id/transactions/add`, `PATCH /transactions/:id`, `DELETE /transactions/:id`, `GET /id?type=&name=`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
+Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, `GET /payees`, `GET /budget/months`, `GET /budget/:month`, `POST /budget/:month/set-amount`, `POST /accounts/:id/transactions/import`, `POST /accounts/:id/transactions/add`, `PATCH /transactions/:id`, `DELETE /transactions/:id`, `GET /id?type=&name=`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
 
 ## Config (env)
 
@@ -113,7 +113,7 @@ Empty strings count as unset. Invalid values stop start-up with a one-line error
 - Money is integer minor units (expenses negative). Dates are `YYYY-MM-DD` and months are `YYYY-MM`. Use `utils.amountToInteger` rather than hand-rolled rounding.
 - Prefer `importTransactions` (it reconciles, runs rules and dedupes by `imported_id`) over `addTransactions` for user input.
 - Account-scoped routes nest under `/accounts/:id/…` (including `…/transactions/import|add`), so `/transactions/:id` always means a transaction id.
-- Not built yet: bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, exempting `/healthz`; how `/docs` is handled is an open decision in plan.md), write endpoints and their `body` schemas, end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
+- Not built yet: `/query` and `/bank-sync` (Stage 4), bearer-token auth (`BRIDGE_TOKEN` in an `onRequest` hook, exempting `/healthz`; how `/docs` is handled is an open decision in plan.md), end-to-end encrypted budgets (TBD, `downloadBudget` takes `{ password }`).
 
 ## Rules
 
@@ -144,4 +144,5 @@ Each rule guards against a bug class found in review. Follow them in every chang
   - `importTransactions(accountId, txns, opts)`: passing `opts` replaces the defaults `{ defaultCleared: true, dryRun: false }`. Returns `{ errors, added, updated, updatedPreview }`; `errors` only reports non-integer amounts. An unknown account is not checked.
   - `addTransactions()` resolves `"ok"`, not the new ids, and does not check the account.
   - `updateTransaction()` / `deleteTransaction()` resolve `[]` for an unknown id and otherwise resolve before their batch write finishes (it isn't awaited), so a sync right after can miss the change.
+  - `setBudgetAmount()` checks neither month nor category, unlike `setBudgetCarryover()`.
   - Default AQL `transactions` queries use `splits: "inline"`, which hides split parents; use `splits: "all"` to match any id.

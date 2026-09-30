@@ -90,7 +90,7 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 | `GET` | `/payees` | `getPayees` | (built) |
 | `GET` | `/budget/months` | `getBudgetMonths` | months the budget covers (built) |
 | `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM`, `404` outside the budget (built) |
-| `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | `{ categoryId, amount }` |
+| `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | `{ categoryId, amount }`. `404` outside the budget, `400` for an unknown category (built) |
 | `POST` | `/query` | `runQuery` + `q(...)` | constrained ActualQL passthrough |
 | `POST` | `/bank-sync` | `runBankSync` | optional `{ accountId }` |
 | `GET` | `/id?type=&name=` | `getIDByName` | resolve names → ids, `404` if no match (built) |
@@ -289,11 +289,11 @@ start().catch((e) => {
 | [x] | 0 — Prereqs | Node 22.9+, pnpm, Actual server reachable | `curl` the server, `pnpm add @actual-app/api fastify` |
 | [x] | 1 — Skeleton | init + budget selection + downloadBudget + `/healthz` + `/budgets` + periodic sync + graceful shutdown | `/healthz` returns ok after warm-up |
 | [x] | 2 — Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
-| [ ] | 3 — Write endpoints | import, add, update, delete, set-amount, with write lock + sync after each write | a posted txn appears in the Actual UI |
+| [x] | 3 — Write endpoints | import, add, update, delete, set-amount, with write lock + sync after each write (`BudgetWriteQueue`, shared with the periodic sync; every id in a write is checked first: unknown path target `404`, unknown body reference `400`) | a posted txn appears in the Actual UI |
 | [ ] | 4 — Query + bank sync | constrained `/query`, `/bank-sync` | allowlisted tables only |
 | [ ] | 5 — Hardening | bearer-token auth, schema validation on every route (TypeBox schemas feed validation, serialization and the OpenAPI spec; request and response schemas done for existing routes), central error handler (basic version done: `NotReadyError` → 503, `NotFoundError` → 404, validation and `InvalidInputError` → 400, library `APIError` objects translated in `core/actual/`, generic 500), no secrets in logs | security checklist met |
 | [ ] | 6 — Deploy (TBD) | packaging and restart policy (approach not decided), persistent `DATA_DIR` | survives a reboot |
-| [ ] | 7 — Tests + observability | unit tests (budget selection, amounts), smoke test against a throwaway budget, structured logs | green CI (partial: Vitest unit tests for config, budget selection, periodic sync, error translation, dates and budget-month mapping, plus `app.inject` route tests; pino-only logs) |
+| [ ] | 7 — Tests + observability | unit tests (budget selection, amounts), smoke test against a throwaway budget, structured logs | green CI (partial: Vitest unit tests for config, budget selection, periodic sync, the write queue, error translation, dates, budget-month mapping and writer id checks, plus `app.inject` route tests; pino-only logs) |
 
 ---
 

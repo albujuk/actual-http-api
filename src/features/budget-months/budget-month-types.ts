@@ -32,3 +32,8 @@ export interface BudgetMonthReader {
   months(): Promise<string[]>;
   month(month: string): Promise<BudgetMonth>;
 }
+
+export interface BudgetAmountWriter {
+  // Throws NotFoundError for a month outside the budget, InvalidInputError for an unknown category.
+  setAmount(month: string, categoryId: string, amount: number): Promise<void>;
+}
