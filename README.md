@@ -80,9 +80,9 @@ Only budgets that exist on the server count. Stale copies in the local cache are
 
 1. **Boot.** The service reads config from the environment and starts listening. `/healthz` returns `503` at this point.
 2. **Init.** It calls `api.init()`, picks a budget, and runs `api.downloadBudget()`. This is slow, since it needs the network and a full database load. It runs once. When it finishes, `/healthz` returns `200`.
-3. **Serve.** It handles requests against the in-memory budget.
-4. **Periodic sync.** It calls `api.sync()` `SYNC_INTERVAL_MS` after the previous sync finishes, so syncs never overlap. The service picks up changes from other devices and bank sync even when it receives no writes. A failed sync is logged and reported in `/healthz` as `lastSyncError`, and the next one is still scheduled.
-5. **Shutdown.** On `SIGTERM` or `SIGINT`, it waits for any in-progress start-up step, stops the timer and waits for a running sync, closes the HTTP server, runs a final `api.sync()`, and then calls `api.shutdown()`. Skipping this step can lose the last write or corrupt the cache. An unhandled error triggers the same shutdown and exits with code 1. If shutdown takes longer than 10 seconds, the process exits with code 1.
+3. **Serve.** It handles requests against the in-memory budget. Reads run directly. Writes run one at a time through a queue, and each ends with `api.sync()`.
+4. **Periodic sync.** It calls `api.sync()` `SYNC_INTERVAL_MS` after the previous sync finishes, so syncs never overlap. Periodic syncs go through the same queue as writes, so a sync never runs in the middle of a write. The service picks up changes from other devices and bank sync even when it receives no writes. A failed sync is logged and reported in `/healthz` as `lastSyncError`, and the next one is still scheduled.
+5. **Shutdown.** On `SIGTERM` or `SIGINT`, it waits for any in-progress start-up step, stops the timer and waits for a running sync, closes the HTTP server (in-flight requests finish), waits for queued writes, runs a final `api.sync()`, and then calls `api.shutdown()`. Skipping this step can lose the last write or corrupt the cache. An unhandled error triggers the same shutdown and exits with code 1. If shutdown takes longer than 10 seconds, the process exits with code 1.
 
 Any failure during start-up exits the process with code 1. Let a supervisor (for example systemd) restart it rather than running with a half-loaded budget.
 
@@ -140,7 +140,7 @@ Errors are JSON `{"error": "<message>"}`:
 ## Operational constraints
 
 - **Run one instance per budget.** The service mutates a local SQLite copy and syncs it. Two replicas against the same budget would diverge and cause sync conflicts.
-- **Writes are serialized.** Every mutating endpoint will run behind an async mutex and end with `api.sync()`, so concurrent requests can't interleave.
+- **Writes are serialized.** Every mutating endpoint runs through one queue, together with the periodic sync, and ends with `api.sync()`, so concurrent requests can't interleave.
 - **Persist `DATA_DIR`.** Without a persistent volume, every restart downloads the whole budget again.
 - **Pin `@actual-app/api`.** ActualQL is mostly undocumented upstream and changes between releases. Re-check the `q(...)` builder methods after every upgrade.
 
@@ -187,8 +187,8 @@ src/
   main.ts        composition root: wires the modules, runs start-up and shutdown
   config.ts      environment → validated, typed config
   lifecycle.ts   process signals and fatal errors → one graceful shutdown
-  core/          shared infrastructure: Actual connection and error translation,
-                 Fastify app setup and error mapping, background sync
+  core/          shared infrastructure: Actual connection, error translation and the
+                 write queue, Fastify app setup and error mapping, background sync
   features/      one folder per resource (accounts, transactions, …): its types,
                  budget access, HTTP routes and tests together
 test/support/    shared test helpers (tests sit next to the code as *.test.ts)

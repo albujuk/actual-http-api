@@ -37,19 +37,21 @@ src/
     dates.ts               pure parseDay(): YYYY-MM-DD -> local-midnight Date
     actual/
       types.ts             connection-level types + interfaces: BudgetSummary, Connection, BudgetLoader,
-                           BudgetCatalog, BudgetStatus, Syncable
-      errors.ts            NotReadyError (503), NotFoundError (404), ActualApiError (unmapped library error, 500)
+                           BudgetCatalog, BudgetStatus, Syncable, WriteQueue
+      errors.ts            NotReadyError (503), NotFoundError (404), InvalidInputError (400, unknown id in a body),
+                           ActualApiError (unmapped library error, 500)
       api-errors.ts        pure translateApiError() + callApi(): library APIError objects -> typed errors
       guard.ts             requireLoaded(status): throws NotReadyError before the budget loads
       actual-connection.ts ActualConnection: init/shutdown, list budgets, load one. One per process
-      budget-sync.ts       BudgetSync: Syncable capability, guarded by BudgetStatus
+      write-queue.ts       BudgetWriteQueue: WriteQueue + Syncable. Serializes writes (each followed by a sync) and
+                           periodic syncs, guarded by BudgetStatus; close() drains it and rejects new work (503)
       budget-selection.ts  pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
     http/
       app.ts               buildApp(modules, options): creates Fastify, error handlers, docs, then each module's plugin. Knows no concrete route
       route-module.ts      RouteModule { tag, plugin }: the abstraction app.ts and docs depend on
       docs.ts              registerDocs(): @fastify/swagger + Swagger UI at /docs, tags from the modules. Registers before routes
-      schemas.ts           cross-cutting TypeBox schemas only (ErrorResponse, commonErrors, badRequest, notFound,
-                           notReady, Id/IdParams, Day(description))
+      schemas.ts           cross-cutting TypeBox schemas only (ErrorResponse, commonErrors, badRequest, invalidInput,
+                           notFound, notReady, Id/IdField(description)/IdParams, Day(description), Amount(description))
       error-handler.ts     JSON { error } responses; 5xx never carry the raw message
     sync/
       periodic-sync.ts     PeriodicSync: chained setTimeout around a Syncable; implements SyncStatus
@@ -67,7 +69,7 @@ test/support/              shared test helpers only: fixtures + fakeStatus(), te
 Conventions to keep:
 
 - **Dependency injection through `main.ts` only.** Modules receive their collaborators and never import singletons. Only `main.ts` calls `loadConfig(process.env)`.
-- **Depend on the narrowest interface.** Routes and `PeriodicSync` take `BudgetStatus`, `BudgetCatalog` or `Syncable`, never `ActualConnection`. For a new capability, add an interface in the feature's `<name>-types.ts` and implement it in a **new class** in that feature folder (like `AccountQueries`: it takes `BudgetStatus` and throws if no budget is loaded). Connection-level capabilities (like `BudgetSync`) go in `core/actual/`. Do not grow `ActualConnection`, which only owns connection and budget-load state. Inject the capability into a new route factory registered in `buildApp`.
+- **Depend on the narrowest interface.** Routes and `PeriodicSync` take `BudgetStatus`, `BudgetCatalog` or `Syncable`, never `ActualConnection`. For a new capability, add an interface in the feature's `<name>-types.ts` and implement it in a **new class** in that feature folder (like `AccountQueries`: it takes `BudgetStatus` and throws if no budget is loaded). Connection-level capabilities (like `BudgetWriteQueue`) go in `core/actual/`. Write capabilities take the `WriteQueue`, never the connection, and run all their checks and library calls inside one `queue.write()`. Do not grow `ActualConnection`, which only owns connection and budget-load state. Inject the capability into a new route factory registered in `buildApp`.
 - **Import `@actual-app/api` only in `core/actual/` and in a feature's capability classes** (`*-queries.ts`, `name-resolver.ts`, later `*-writer.ts`). Route files never import it. The library is a process-wide singleton, so the `ActualConnection` constructor throws on a second instance. Budget selection policy lives in the composition root, not in `core/actual/`. Keep pure logic, such as `selectBudget`, in its own side-effect-free functions.
 - **Add a resource as a new `features/<name>/` folder** with its types, capability class, `<name>-routes.ts` returning a `RouteModule`, and tests. Add the module to the `buildApp([...])` list in `main.ts` and its path and tag to the spec test in `src/app.test.ts`. Nothing in `core/` changes: `app.ts`, `docs.ts` and `schemas.ts` stay untouched. The module keeps its TypeBox schemas and its tag in its own file; only schemas used by several modules go in `schemas.ts`.
 - **Dependency direction: features import `core/`, `core/` never imports a feature.** Between features only `import type` is allowed (transactions uses `AccountReader`, budget-months uses `Category`). All runtime wiring stays in `main.ts`. No `index.ts` barrels: import modules directly.
@@ -79,7 +81,8 @@ Conventions to keep:
 - Start-up order: `app.listen()` runs **before** `connection.connect()`, then `main.ts` calls `selectBudget(await connection.listBudgets(), ...)` and `connection.load(budget)`. `listBudgets()` needs only `connect()`, not a loaded budget; before that it throws `NotReadyError` (503). `/healthz` returns `503 {status:"starting"}` until the budget has loaded, then `200 {status:"ok", budget, lastSyncAt?, lastSyncError?}`. It stays 200 when syncs fail. Periodic sync starts after the budget loads. `start()` checks an `AbortSignal` between steps. Any start-up failure calls `process.exit(1)`, unless shutdown has already begun.
 - Budget selection (`selectBudget`): `ACTUAL_SYNC_ID` wins. Otherwise the bridge matches on `ACTUAL_BUDGET_NAME`. If neither is set, it auto-picks when the server has exactly one budget. Zero or several matches throw an error that lists the available budgets.
 - `listBudgets()` keeps only remote files (`state: "remote"`), deduped by `groupId`. `api.getBudgets()` also returns local cache folders, which can be stale.
-- Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server, then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
+- Writes: every write route calls a writer, which runs its checks and the library call inside `BudgetWriteQueue.write()`, then `api.sync()`. The periodic sync runs through the same queue. If the sync after a write fails, the write still succeeds (it is in the local copy, the next sync sends it); the error goes to `onSyncError` (logged).
+- Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server (waits for in-flight requests), `await writes.close()` (drains the queue, new writes get 503), then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
 
 Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, `GET /payees`, `GET /budget/months`, `GET /budget/:month`, `GET /id?type=&name=`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
 
@@ -102,7 +105,7 @@ Empty strings count as unset. Invalid values stop start-up with a one-line error
 ## Invariants for upcoming work (from the plan)
 
 - **Run a single bridge instance per budget.** The local SQLite copy has a single writer.
-- **Serialize writes** behind an async mutex, and `sync()` after each write.
+- **Serialize writes** through `BudgetWriteQueue` (built), which `sync()`s after each write. New writes (bank sync) go through it too.
 - Money is integer minor units (expenses negative). Dates are `YYYY-MM-DD` and months are `YYYY-MM`. Use `utils.amountToInteger` rather than hand-rolled rounding.
 - Prefer `importTransactions` (it reconciles, runs rules and dedupes by `imported_id`) over `addTransactions` for user input.
 - Account-scoped routes nest under `/accounts/:id/…` (including the Stage 3 `…/transactions/import|add`), so `/transactions/:id` always means a transaction id.
@@ -133,3 +136,4 @@ Each rule guards against a bug class found in review. Follow them in every chang
   - `getIDByName(type, name)` is positional. Types: `accounts`, `categories`, `payees`, `schedules`.
   - `getAccountBalance(id, cutoff?: Date)` formats the cutoff in local time; unknown id returns `0`. `getTransactions()` skips empty bounds and returns splits grouped with `subtransactions`; unknown account returns `[]`.
   - `getBudgetMonth()` sheet cells never set come back as `0` (so `carryover` can be `0` instead of `false`).
+  - `sync()` rejects with a real `Error` (not an APIError object) when the server sync fails.

@@ -21,3 +21,12 @@ export class ActualApiError extends Error {
     this.name = "ActualApiError";
   }
 }
+
+// Thrown when a request body refers to something that does not exist, such as an unknown
+// category id. The message is bridge-authored and safe to send.
+export class InvalidInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidInputError";
+  }
+}

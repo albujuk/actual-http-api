@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { loadConfig, type Config } from "./config.js";
 import { ActualConnection } from "./core/actual/actual-connection.js";
 import { selectBudget } from "./core/actual/budget-selection.js";
-import { BudgetSync } from "./core/actual/budget-sync.js";
+import { BudgetWriteQueue } from "./core/actual/write-queue.js";
 import { buildApp } from "./core/http/app.js";
 import { PeriodicSync } from "./core/sync/periodic-sync.js";
 import { AccountQueries } from "./features/accounts/account-queries.js";
@@ -38,7 +38,10 @@ const connection = new ActualConnection({
   dataDir: config.dataDir,
 });
 
-const periodicSync = new PeriodicSync(new BudgetSync(connection), config.syncIntervalMs, (err) =>
+// Writes and periodic syncs share one queue, so they never interleave.
+const writes = new BudgetWriteQueue(connection, (err) => app.log.error(err, "sync after write failed"));
+
+const periodicSync = new PeriodicSync(writes, config.syncIntervalMs, (err) =>
   app.log.error(err, "periodic sync failed"),
 );
 
@@ -70,7 +73,9 @@ onShutdown(
     // connect/download can't be cancelled; wait for the current step, bounded by the timeout.
     await startup;
     await periodicSync.stop();
+    // Waits for in-flight requests, then the queue settles any write they left behind.
     await app.close();
+    await writes.close();
     await connection.close();
   },
   { onError: (err) => app.log.error(err, "shutdown failed"), timeoutMs: SHUTDOWN_TIMEOUT_MS },

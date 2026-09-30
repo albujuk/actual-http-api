@@ -1,5 +1,5 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
-import { NotFoundError, NotReadyError } from "../actual/errors.js";
+import { InvalidInputError, NotFoundError, NotReadyError } from "../actual/errors.js";
 
 // Maps errors to JSON { error }. 5xx responses never carry the raw message.
 export function errorHandler(err: FastifyError, req: FastifyRequest, reply: FastifyReply): void {
@@ -9,6 +9,10 @@ export function errorHandler(err: FastifyError, req: FastifyRequest, reply: Fast
   }
   if (err instanceof NotFoundError) {
     reply.code(404).send({ error: err.message });
+    return;
+  }
+  if (err instanceof InvalidInputError) {
+    reply.code(400).send({ error: err.message });
     return;
   }
   const status = err.statusCode ?? 500;

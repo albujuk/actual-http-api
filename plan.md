@@ -291,7 +291,7 @@ start().catch((e) => {
 | [x] | 2 — Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
 | [ ] | 3 — Write endpoints | import, add, update, delete, set-amount, with write lock + sync after each write | a posted txn appears in the Actual UI |
 | [ ] | 4 — Query + bank sync | constrained `/query`, `/bank-sync` | allowlisted tables only |
-| [ ] | 5 — Hardening | bearer-token auth, schema validation on every route (TypeBox schemas feed validation, serialization and the OpenAPI spec; request and response schemas done for existing routes), central error handler (basic version done: `NotReadyError` → 503, `NotFoundError` → 404, validation → 400, library `APIError` objects translated in `core/actual/`, generic 500), no secrets in logs | security checklist met |
+| [ ] | 5 — Hardening | bearer-token auth, schema validation on every route (TypeBox schemas feed validation, serialization and the OpenAPI spec; request and response schemas done for existing routes), central error handler (basic version done: `NotReadyError` → 503, `NotFoundError` → 404, validation and `InvalidInputError` → 400, library `APIError` objects translated in `core/actual/`, generic 500), no secrets in logs | security checklist met |
 | [ ] | 6 — Deploy (TBD) | packaging and restart policy (approach not decided), persistent `DATA_DIR` | survives a reboot |
 | [ ] | 7 — Tests + observability | unit tests (budget selection, amounts), smoke test against a throwaway budget, structured logs | green CI (partial: Vitest unit tests for config, budget selection, periodic sync, error translation, dates and budget-month mapping, plus `app.inject` route tests; pino-only logs) |
 
