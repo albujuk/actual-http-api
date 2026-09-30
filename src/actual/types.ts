@@ -97,6 +97,9 @@ export type BudgetMonth = {
   categoryGroups: BudgetMonthGroup[];
 };
 
+export const NAME_TYPES = ["accounts", "categories", "payees", "schedules"] as const;
+export type NameType = (typeof NAME_TYPES)[number];
+
 export interface AccountReader {
   list(): Promise<Account[]>;
   // Throws NotFoundError for an unknown id.
@@ -120,4 +123,8 @@ export interface PayeeReader {
 export interface BudgetMonthReader {
   months(): Promise<string[]>;
   month(month: string): Promise<BudgetMonth>;
+}
+
+export interface NameResolver {
+  idByName(type: NameType, name: string): Promise<string>;
 }

@@ -14,7 +14,7 @@ HTTP client ──HTTP+JSON──▶ actual-api (@actual-app/api, budget in memo
 
 ## Status
 
-The service skeleton works: config, budget loading, readiness, periodic sync and graceful shutdown. The read and write endpoints are planned but not built yet. See [Endpoints](#endpoints) and [Roadmap](#roadmap).
+The service skeleton and the read endpoints work: config, budget loading, readiness, periodic sync, graceful shutdown, and reads for accounts, balances, transactions, categories, payees, budget months and name lookup. The write endpoints are planned but not built yet. See [Endpoints](#endpoints) and [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -103,6 +103,7 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 | `GET` | `/payees` | All payees |
 | `GET` | `/budget/months` | The months the budget covers: `["2026-01", ...]` |
 | `GET` | `/budget/:month` | Budget figures for `YYYY-MM`: totals plus budgeted, spent, balance and carryover per category. `404` for a month outside the budget |
+| `GET` | `/id?type=&name=` | `{"id": "..."}` for an exact name. `type` is `accounts`, `categories`, `payees` or `schedules`. `404` if no match |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
 
@@ -128,7 +129,6 @@ Errors are JSON `{"error": "<message>"}`:
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | Body: `{ categoryId, amount }` |
 | `POST` | `/query` | `runQuery` + `q(...)` | ActualQL passthrough, limited to an allowlist of tables |
 | `POST` | `/bank-sync` | `runBankSync` | Optional body: `{ accountId }` |
-| `GET` | `/id?type=&name=` | `getIDByName` | Resolves a name to an id |
 
 ## Data conventions
 
@@ -173,12 +173,12 @@ TBD. Packaging (container image or other) is not decided yet. Whatever it ends u
 |---|---|---|---|
 | [x] | 0. Prereqs | Node 22.9+, pnpm, a reachable Actual server | `curl` the server |
 | [x] | 1. Skeleton | init, budget download, `/healthz`, `/budgets`, periodic sync, graceful shutdown | `/healthz` returns ok after warm-up |
-| [ ] | 2. Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
+| [x] | 2. Read endpoints | accounts, balance, transactions, categories, payees, budget month, `/id` | `curl` returns real data |
 | [ ] | 3. Write endpoints | import, add, update, delete, set-amount, with a write lock and sync after each write | A posted transaction appears in the Actual UI |
 | [ ] | 4. Query and bank sync | Constrained `/query`, `/bank-sync` | Only allowlisted tables are queryable |
-| [ ] | 5. Hardening | Bearer-token auth, schema validation on every route (TypeBox response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
+| [ ] | 5. Hardening | Bearer-token auth, schema validation on every route (TypeBox request and response schemas done for existing routes), central error handler (basic version done), no secrets in logs | Security checklist is met |
 | [ ] | 6. Deploy (TBD) | Packaging and restart policy (approach not decided), persistent `DATA_DIR` | Survives a reboot |
-| [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
+| [ ] | 7. Tests and observability | Unit tests (done for config, budget selection, periodic sync, error translation, dates; amounts to come), a smoke test against a throwaway budget, structured logs | CI is green |
 
 ## Project layout
 

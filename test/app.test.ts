@@ -8,6 +8,7 @@ import { budgetMonthRoutes } from "../src/http/routes/budget-months.js";
 import { budgetRoutes } from "../src/http/routes/budgets.js";
 import { categoryRoutes } from "../src/http/routes/categories.js";
 import { healthRoutes } from "../src/http/routes/health.js";
+import { idRoutes } from "../src/http/routes/ids.js";
 import { payeeRoutes } from "../src/http/routes/payees.js";
 import { transactionRoutes } from "../src/http/routes/transactions.js";
 
@@ -98,6 +99,7 @@ function build(opts: { docs?: boolean; loaded?: BudgetSummary } = {}): FastifyIn
       }),
       payeeRoutes({ list: () => Promise.reject(new NotReadyError("no budget loaded")) }),
       budgetMonthRoutes({ months: async () => ["2026-09"], month: async () => month }),
+      idRoutes({ idByName: async (_type, name) => (name === "Shop" ? "p1" : Promise.reject(new NotFoundError("not found"))) }),
     ],
     { docs: opts.docs ?? true, version: "1.2.3" },
   );
@@ -126,6 +128,7 @@ describe("buildApp docs", () => {
       "/categories",
       "/category-groups",
       "/healthz",
+      "/id",
       "/payees",
     ]);
     expect(Object.keys(spec.paths["/healthz"].get.responses)).toEqual(["200", "500", "503"]);
@@ -144,6 +147,7 @@ describe("buildApp docs", () => {
       "categories",
       "payees",
       "budget",
+      "ids",
     ]);
   });
 
@@ -245,6 +249,19 @@ describe("read routes", () => {
 
   it.each(["2026-13", "2026-9", "202609"])("rejects month %j with 400", async (m) => {
     expect((await get(`/budget/${m}`)).statusCode).toBe(400);
+  });
+
+  it("resolves a name to an id", async () => {
+    const res = await get("/id?type=payees&name=Shop");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ id: "p1" });
+    expect((await get("/id?type=payees&name=Other")).statusCode).toBe(404);
+  });
+
+  it("rejects an unknown name type or missing name with 400", async () => {
+    expect((await get("/id?type=bogus&name=Shop")).statusCode).toBe(400);
+    expect((await get("/id?type=payees")).statusCode).toBe(400);
+    expect((await get("/id?type=payees&name=")).statusCode).toBe(400);
   });
 
   it.each(["start=2026-02-30", "end=2026-9-1", "start=yesterday"])("rejects transactions query %j with 400", async (q) => {

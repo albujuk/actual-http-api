@@ -6,6 +6,7 @@ import { BudgetMonthQueries } from "./actual/budget-month-queries.js";
 import { selectBudget } from "./actual/budget-selection.js";
 import { BudgetSync } from "./actual/budget-sync.js";
 import { CategoryQueries } from "./actual/category-queries.js";
+import { ApiNameResolver } from "./actual/name-resolver.js";
 import { PayeeQueries } from "./actual/payee-queries.js";
 import { TransactionQueries } from "./actual/transaction-queries.js";
 import { buildApp } from "./http/app.js";
@@ -14,6 +15,7 @@ import { budgetMonthRoutes } from "./http/routes/budget-months.js";
 import { budgetRoutes } from "./http/routes/budgets.js";
 import { categoryRoutes } from "./http/routes/categories.js";
 import { healthRoutes } from "./http/routes/health.js";
+import { idRoutes } from "./http/routes/ids.js";
 import { payeeRoutes } from "./http/routes/payees.js";
 import { transactionRoutes } from "./http/routes/transactions.js";
 import { onShutdown } from "./lifecycle.js";
@@ -54,6 +56,7 @@ const app = buildApp(
     categoryRoutes(new CategoryQueries(connection)),
     payeeRoutes(new PayeeQueries(connection)),
     budgetMonthRoutes(new BudgetMonthQueries(connection)),
+    idRoutes(new ApiNameResolver(connection)),
   ],
   { docs: config.docsEnabled, version },
 );

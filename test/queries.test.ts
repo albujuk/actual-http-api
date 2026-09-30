@@ -4,6 +4,7 @@ import { AccountQueries } from "../src/actual/account-queries.js";
 import { BudgetMonthQueries } from "../src/actual/budget-month-queries.js";
 import { CategoryQueries } from "../src/actual/category-queries.js";
 import { ActualApiError, NotFoundError, NotReadyError } from "../src/actual/errors.js";
+import { ApiNameResolver } from "../src/actual/name-resolver.js";
 import { PayeeQueries } from "../src/actual/payee-queries.js";
 import { TransactionQueries } from "../src/actual/transaction-queries.js";
 import type { BudgetStatus, BudgetSummary } from "../src/actual/types.js";
@@ -12,6 +13,7 @@ vi.mock("@actual-app/api", () => ({
   getAccounts: vi.fn(),
   getAccountBalance: vi.fn(),
   getTransactions: vi.fn(),
+  getIDByName: vi.fn(),
   getCategories: vi.fn(),
   getCategoryGroups: vi.fn(),
   getPayees: vi.fn(),
@@ -70,10 +72,18 @@ describe("TransactionQueries", () => {
   });
 });
 
+describe("ApiNameResolver", () => {
+  it("maps a failed lookup to NotFoundError", async () => {
+    vi.mocked(api.getIDByName).mockRejectedValue({ type: "APIError", message: "Not found: payees with name X" });
+    await expect(new ApiNameResolver(status).idByName("payees", "X")).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
 type LibraryFn =
   | "getAccounts"
   | "getAccountBalance"
   | "getTransactions"
+  | "getIDByName"
   | "getCategories"
   | "getCategoryGroups"
   | "getPayees"
@@ -95,6 +105,7 @@ const methods: Array<[name: string, fails: LibraryFn, call: () => Promise<unknow
   ["PayeeQueries.list", "getPayees", () => new PayeeQueries(status).list()],
   ["BudgetMonthQueries.months", "getBudgetMonths", () => new BudgetMonthQueries(status).months()],
   ["BudgetMonthQueries.month", "getBudgetMonth", () => new BudgetMonthQueries(status).month("2026-09")],
+  ["ApiNameResolver.idByName", "getIDByName", () => new ApiNameResolver(status).idByName("payees", "X")],
 ];
 
 describe.each(methods)("%s", (_name, fails, call) => {
