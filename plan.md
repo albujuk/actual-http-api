@@ -77,8 +77,9 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 | `GET` | `/healthz` | — | `200` only once init done |
 | `GET` | `/budgets` | `getBudgets` | lists budgets on the server (built) |
 | `GET` | `/docs`, `/docs/json`, `/docs/yaml` | — | Swagger UI + OpenAPI 3.1 spec generated from route schemas, on by default in development, off in production, `DOCS_ENABLED` overrides (built) |
-| `GET` | `/accounts` | `getAccounts` | |
-| `GET` | `/accounts/:id/balance` | `getAccountBalance` | optional `?cutoff=YYYY-MM-DD` |
+| `GET` | `/accounts` | `getAccounts` | (built) |
+| `GET` | `/accounts/:id` | `getAccounts` | `404` for an unknown id (built) |
+| `GET` | `/accounts/:id/balance` | `getAccountBalance` | optional `?cutoff=YYYY-MM-DD`, inclusive, parsed as local midnight. `404` for an unknown id (built) |
 | `GET` | `/transactions/:accountId?start=&end=` | `getTransactions` | inclusive date range |
 | `POST` | `/transactions/:accountId/import` | `importTransactions` | reconciles + runs rules + dedupes |
 | `POST` | `/transactions/:accountId/add` | `addTransactions` | raw insert, no reconcile |

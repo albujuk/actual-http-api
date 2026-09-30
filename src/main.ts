@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { loadConfig, type Config } from "./config.js";
+import { AccountQueries } from "./actual/account-queries.js";
 import { ActualConnection } from "./actual/actual-connection.js";
 import { selectBudget } from "./actual/budget-selection.js";
 import { BudgetSync } from "./actual/budget-sync.js";
 import { buildApp } from "./http/app.js";
+import { accountRoutes } from "./http/routes/accounts.js";
 import { budgetRoutes } from "./http/routes/budgets.js";
 import { healthRoutes } from "./http/routes/health.js";
 import { onShutdown } from "./lifecycle.js";
@@ -33,10 +35,16 @@ const periodicSync = new PeriodicSync(new BudgetSync(connection), config.syncInt
 // package.json sits one level above both src/ and dist/.
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
-const app = buildApp([healthRoutes(connection, periodicSync), budgetRoutes(connection)], {
-  docs: config.docsEnabled,
-  version,
-});
+const accounts = new AccountQueries(connection);
+
+const app = buildApp(
+  [
+    healthRoutes(connection, periodicSync),
+    budgetRoutes(connection),
+    accountRoutes(accounts),
+  ],
+  { docs: config.docsEnabled, version },
+);
 
 const shutdown = new AbortController();
 const startup = start(shutdown.signal);

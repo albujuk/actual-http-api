@@ -94,6 +94,9 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 |---|---|---|
 | `GET` | `/healthz` | `503 {"status":"starting"}` until the budget loads, then `200 {"status":"ok","budget":"<name>","lastSyncAt":"<ISO time>","lastSyncError":"<message>"}`. The sync fields are absent until the first sync or failure. It stays `200` when syncs fail |
 | `GET` | `/budgets` | Budgets on the server: `[{"syncId": "...", "name": "..."}]`. `503` until the service has connected |
+| `GET` | `/accounts` | All accounts: `[{"id","name","offbudget","closed","balance_current","account_group_id"}]` |
+| `GET` | `/accounts/:id` | One account. `404` if the id is unknown |
+| `GET` | `/accounts/:id/balance` | `{"balance": <minor units>}`. Optional `?cutoff=YYYY-MM-DD` (inclusive, defaults to today). `404` if the id is unknown |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
 
@@ -112,8 +115,6 @@ Errors are JSON `{"error": "<message>"}`:
 
 | Method | Path | Maps to | Notes |
 |---|---|---|---|
-| `GET` | `/accounts` | `getAccounts` | |
-| `GET` | `/accounts/:id/balance` | `getAccountBalance` | Optional `?cutoff=YYYY-MM-DD` |
 | `GET` | `/transactions/:accountId?start=&end=` | `getTransactions` | Date range is inclusive |
 | `POST` | `/transactions/:accountId/import` | `importTransactions` | Reconciles, runs rules, dedupes |
 | `POST` | `/transactions/:accountId/add` | `addTransactions` | Raw insert, no reconciliation |

@@ -1,19 +1,42 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { BudgetSummary } from "../src/actual/types.js";
+import { NotFoundError } from "../src/actual/errors.js";
+import type { Account, BudgetSummary } from "../src/actual/types.js";
 import { buildApp } from "../src/http/app.js";
+import { accountRoutes } from "../src/http/routes/accounts.js";
 import { budgetRoutes } from "../src/http/routes/budgets.js";
 import { healthRoutes } from "../src/http/routes/health.js";
 
 const budget: BudgetSummary = { syncId: "abc", name: "Home" };
 
+const account: Account = {
+  id: "a1",
+  name: "Checking",
+  offbudget: false,
+  closed: false,
+  balance_current: null,
+  account_group_id: null,
+};
+
+const notFound = () => Promise.reject(new NotFoundError("account not found"));
+
 let app: FastifyInstance;
+let calls: { balanceCutoff?: Date };
 
 function build(opts: { docs?: boolean; loaded?: BudgetSummary } = {}): FastifyInstance {
+  calls = {};
   app = buildApp(
     [
       healthRoutes({ loadedBudget: () => opts.loaded }, { lastSync: () => ({ at: "2026-09-30T12:00:00.000Z" }) }),
       budgetRoutes({ listBudgets: async () => [{ ...budget, extra: "dropped" } as BudgetSummary] }),
+      accountRoutes({
+        list: async () => [account],
+        get: async (id) => (id === "a1" ? account : notFound()),
+        balance: async (id, cutoff) => {
+          calls.balanceCutoff = cutoff;
+          return id === "a1" ? 1230 : notFound();
+        },
+      }),
     ],
     { docs: opts.docs ?? true, version: "1.2.3" },
   );
@@ -31,9 +54,26 @@ describe("buildApp docs", () => {
     const spec = res.json();
     expect(spec.openapi).toBe("3.1.0");
     expect(spec.info.version).toBe("1.2.3");
-    expect(Object.keys(spec.paths).sort()).toEqual(["/budgets", "/healthz"]);
+    expect(Object.keys(spec.paths).sort()).toEqual([
+      "/accounts",
+      "/accounts/{id}",
+      "/accounts/{id}/balance",
+      "/budgets",
+      "/healthz",
+    ]);
     expect(Object.keys(spec.paths["/healthz"].get.responses)).toEqual(["200", "500", "503"]);
-    expect(spec.tags.map((t: { name: string }) => t.name)).toEqual(["health", "budgets"]);
+    expect(Object.keys(spec.paths["/accounts/{id}/balance"].get.responses).sort()).toEqual([
+      "200",
+      "400",
+      "404",
+      "500",
+      "503",
+    ]);
+    expect(spec.tags.map((t: { name: string }) => t.name)).toEqual([
+      "health",
+      "budgets",
+      "accounts",
+    ]);
   });
 
   it("serves Swagger UI", async () => {
@@ -65,5 +105,44 @@ describe("route schemas", () => {
   it("drops fields the response schema doesn't declare", async () => {
     const res = await build().inject({ method: "GET", url: "/budgets" });
     expect(res.json()).toEqual([budget]);
+  });
+});
+
+describe("read routes", () => {
+  const get = (url: string) => build().inject({ method: "GET", url });
+
+  it("lists accounts", async () => {
+    const res = await get("/accounts");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([account]);
+  });
+
+  it("returns 404 for an unknown account", async () => {
+    const res = await get("/accounts/nope");
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "account not found" });
+  });
+
+  it("parses the balance cutoff as local midnight", async () => {
+    const res = await get("/accounts/a1/balance?cutoff=2026-09-30");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ balance: 1230 });
+    expect(calls.balanceCutoff).toEqual(new Date(2026, 8, 30));
+  });
+
+  it("passes no cutoff when omitted", async () => {
+    await get("/accounts/a1/balance");
+    expect(calls.balanceCutoff).toBeUndefined();
+  });
+
+  it.each(["2026-02-30", "2026-9-30", "today"])("rejects cutoff %j with 400", async (cutoff) => {
+    const res = await get(`/accounts/a1/balance?cutoff=${cutoff}`);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toHaveProperty("error");
+  });
+
+  it("bounds the id length", async () => {
+    expect((await get(`/accounts/${"x".repeat(65)}`)).statusCode).toBe(400);
+    expect((await get(`/accounts/${"x".repeat(64)}`)).statusCode).toBe(404);
   });
 });
