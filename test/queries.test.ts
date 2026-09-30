@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "@actual-app/api";
 import { AccountQueries } from "../src/actual/account-queries.js";
+import { BudgetMonthQueries } from "../src/actual/budget-month-queries.js";
 import { CategoryQueries } from "../src/actual/category-queries.js";
 import { ActualApiError, NotFoundError, NotReadyError } from "../src/actual/errors.js";
 import { PayeeQueries } from "../src/actual/payee-queries.js";
@@ -14,6 +15,8 @@ vi.mock("@actual-app/api", () => ({
   getCategories: vi.fn(),
   getCategoryGroups: vi.fn(),
   getPayees: vi.fn(),
+  getBudgetMonths: vi.fn(),
+  getBudgetMonth: vi.fn(),
 }));
 
 const account = { id: "a1", name: "Checking", offbudget: false, closed: false, balance_current: null, account_group_id: null };
@@ -73,7 +76,9 @@ type LibraryFn =
   | "getTransactions"
   | "getCategories"
   | "getCategoryGroups"
-  | "getPayees";
+  | "getPayees"
+  | "getBudgetMonths"
+  | "getBudgetMonth";
 
 // Every capability method, and the library call whose failure it must translate.
 const methods: Array<[name: string, fails: LibraryFn, call: () => Promise<unknown>]> = [
@@ -88,6 +93,8 @@ const methods: Array<[name: string, fails: LibraryFn, call: () => Promise<unknow
   ["CategoryQueries.list", "getCategories", () => new CategoryQueries(status).list({})],
   ["CategoryQueries.groups", "getCategoryGroups", () => new CategoryQueries(status).groups({})],
   ["PayeeQueries.list", "getPayees", () => new PayeeQueries(status).list()],
+  ["BudgetMonthQueries.months", "getBudgetMonths", () => new BudgetMonthQueries(status).months()],
+  ["BudgetMonthQueries.month", "getBudgetMonth", () => new BudgetMonthQueries(status).month("2026-09")],
 ];
 
 describe.each(methods)("%s", (_name, fails, call) => {
@@ -112,5 +119,31 @@ describe("CategoryQueries", () => {
     await queries.groups({ hidden: true });
     expect(api.getCategories).toHaveBeenCalledWith({ hidden: false });
     expect(api.getCategoryGroups).toHaveBeenCalledWith({ hidden: true });
+  });
+});
+
+describe("BudgetMonthQueries", () => {
+  it("normalizes the library's month", async () => {
+    vi.mocked(api.getBudgetMonth).mockResolvedValue({
+      month: "2026-09",
+      incomeAvailable: 0,
+      lastMonthOverspent: 0,
+      forNextMonth: 0,
+      totalBudgeted: 0,
+      toBudget: 0,
+      fromLastMonth: 0,
+      totalIncome: 0,
+      totalSpent: 0,
+      totalBalance: 0,
+      categoryGroups: [{ id: "g1", categories: [{ id: "c1", carryover: 0 }] }],
+    });
+    const month = await new BudgetMonthQueries(status).month("2026-09");
+    expect(api.getBudgetMonth).toHaveBeenCalledWith("2026-09");
+    expect(month.categoryGroups[0]?.categories[0]?.carryover).toBe(false);
+  });
+
+  it("maps a month outside the budget to NotFoundError", async () => {
+    vi.mocked(api.getBudgetMonth).mockRejectedValue({ type: "APIError", message: "No budget exists for month: 1999-01" });
+    await expect(new BudgetMonthQueries(status).month("1999-01")).rejects.toBeInstanceOf(NotFoundError);
   });
 });

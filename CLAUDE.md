@@ -34,14 +34,16 @@ src/
   lifecycle.ts             onShutdown(): runs once on SIGTERM/SIGINT or a fatal error, bounded by a timeout
   actual/
     types.ts               bridge-owned data types + narrow interfaces: Connection, BudgetLoader, BudgetCatalog,
-                           BudgetStatus, Syncable, AccountReader, TransactionReader, CategoryReader, PayeeReader
+                           BudgetStatus, Syncable, AccountReader, TransactionReader, CategoryReader, PayeeReader,
+                           BudgetMonthReader
     errors.ts              NotReadyError (503), NotFoundError (404), ActualApiError (unmapped library error, 500)
     api-errors.ts          pure translateApiError() + callApi(): library APIError objects -> typed errors
     guard.ts               requireLoaded(status): throws NotReadyError before the budget loads
     dates.ts               pure parseDay(): YYYY-MM-DD -> local-midnight Date
+    budget-month.ts        pure toBudgetMonth(): normalizes carryover cells to booleans
     actual-connection.ts   ActualConnection: init/shutdown, list budgets, load one. One per process
     budget-sync.ts         BudgetSync: Syncable capability, guarded by BudgetStatus
-    *-queries.ts           AccountQueries, TransactionQueries, CategoryQueries, PayeeQueries:
+    *-queries.ts           AccountQueries, TransactionQueries, CategoryQueries, PayeeQueries, BudgetMonthQueries:
                            one read capability each, guarded by BudgetStatus, library calls wrapped in callApi
     budget-selection.ts    pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
   http/
@@ -73,7 +75,7 @@ Conventions to keep:
 - `listBudgets()` keeps only remote files (`state: "remote"`), deduped by `groupId`. `api.getBudgets()` also returns local cache folders, which can be stale.
 - Shutdown order: abort start-up and await its current step, `await periodicSync.stop()` (waits for a running sync), close the HTTP server, then `connection.close()`, which does a final `api.sync()` (only if a budget loaded) and then `api.shutdown()` (if connected). `unhandledRejection`/`uncaughtException` log and run the same shutdown with exit code 1. The whole shutdown is capped at `SHUTDOWN_TIMEOUT_MS` (10s in `main.ts`), after which it exits 1.
 
-Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, `GET /payees`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
+Current endpoints: `GET /healthz`, `GET /budgets`, `GET /accounts`, `GET /accounts/:id`, `GET /accounts/:id/balance?cutoff=`, `GET /accounts/:id/transactions?start=&end=`, `GET /categories?hidden=`, `GET /category-groups?hidden=`, `GET /payees`, `GET /budget/months`, `GET /budget/:month`, and when docs are enabled (`DOCS_ENABLED`, else on only in development), `GET /docs` (Swagger UI) plus `/docs/json` and `/docs/yaml` (spec). `main.ts` reads the spec version from `package.json`.
 
 ## Config (env)
 
@@ -123,3 +125,4 @@ Each rule guards against a bug class found in review. Follow them in every chang
   - `init()` logs to the console unless you pass `verbose: false`.
   - Errors are plain objects `{ type: "APIError", message, meta }`, e.g. `"Not found: payees with name X"` (`getIDByName`), `"No budget exists for month: …"` (`getBudgetMonth`).
   - `getAccountBalance(id, cutoff?: Date)` formats the cutoff in local time; unknown id returns `0`. `getTransactions()` skips empty bounds and returns splits grouped with `subtransactions`; unknown account returns `[]`.
+  - `getBudgetMonth()` sheet cells never set come back as `0` (so `carryover` can be `0` instead of `false`).

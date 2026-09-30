@@ -69,6 +69,34 @@ export type HiddenFilter = { hidden?: boolean };
 
 export type Payee = { id: string; name: string; transfer_acct?: string | null };
 
+// Per-month figures. Expense entries carry budgeted/spent/balance/carryover, income entries received.
+type MonthFigures = {
+  budgeted?: number;
+  spent?: number;
+  received?: number;
+  balance?: number;
+  carryover?: boolean;
+};
+
+export type BudgetMonthCategory = Category & MonthFigures;
+
+export type BudgetMonthGroup = Omit<CategoryGroup, "categories"> &
+  MonthFigures & { categories: BudgetMonthCategory[] };
+
+export type BudgetMonth = {
+  month: string;
+  incomeAvailable: number;
+  lastMonthOverspent: number;
+  forNextMonth: number;
+  totalBudgeted: number;
+  toBudget: number;
+  fromLastMonth: number;
+  totalIncome: number;
+  totalSpent: number;
+  totalBalance: number;
+  categoryGroups: BudgetMonthGroup[];
+};
+
 export interface AccountReader {
   list(): Promise<Account[]>;
   // Throws NotFoundError for an unknown id.
@@ -87,4 +115,9 @@ export interface CategoryReader {
 
 export interface PayeeReader {
   list(): Promise<Payee[]>;
+}
+
+export interface BudgetMonthReader {
+  months(): Promise<string[]>;
+  month(month: string): Promise<BudgetMonth>;
 }

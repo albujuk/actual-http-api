@@ -88,7 +88,8 @@ Keep it small and resource-shaped. All amounts are integer minor units in both d
 | `GET` | `/categories` | `getCategories` | optional `?hidden=` (built) |
 | `GET` | `/category-groups` | `getCategoryGroups` | categories nested, optional `?hidden=` (built) |
 | `GET` | `/payees` | `getPayees` | (built) |
-| `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM` |
+| `GET` | `/budget/months` | `getBudgetMonths` | months the budget covers (built) |
+| `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM`, `404` outside the budget (built) |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | `{ categoryId, amount }` |
 | `POST` | `/query` | `runQuery` + `q(...)` | constrained ActualQL passthrough |
 | `POST` | `/bank-sync` | `runBankSync` | optional `{ accountId }` |

@@ -101,6 +101,8 @@ Any failure during start-up exits the process with code 1. Let a supervisor (for
 | `GET` | `/categories` | All categories, flat. Optional `?hidden=true\|false` |
 | `GET` | `/category-groups` | Category groups with their categories nested. Optional `?hidden=true\|false` |
 | `GET` | `/payees` | All payees |
+| `GET` | `/budget/months` | The months the budget covers: `["2026-01", ...]` |
+| `GET` | `/budget/:month` | Budget figures for `YYYY-MM`: totals plus budgeted, spent, balance and carryover per category. `404` for a month outside the budget |
 | `GET` | `/docs` | Swagger UI. Only when docs are enabled (see `DOCS_ENABLED`) |
 | `GET` | `/docs/json`, `/docs/yaml` | OpenAPI 3.1 spec. Only when docs are enabled |
 
@@ -123,7 +125,6 @@ Errors are JSON `{"error": "<message>"}`:
 | `POST` | `/accounts/:id/transactions/add` | `addTransactions` | Raw insert, no reconciliation |
 | `PATCH` | `/transactions/:id` | `updateTransaction` | |
 | `DELETE` | `/transactions/:id` | `deleteTransaction` | |
-| `GET` | `/budget/:month` | `getBudgetMonth` | `YYYY-MM` |
 | `POST` | `/budget/:month/set-amount` | `setBudgetAmount` | Body: `{ categoryId, amount }` |
 | `POST` | `/query` | `runQuery` + `q(...)` | ActualQL passthrough, limited to an allowlist of tables |
 | `POST` | `/bank-sync` | `runBankSync` | Optional body: `{ accountId }` |

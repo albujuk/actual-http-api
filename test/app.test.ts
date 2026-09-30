@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { ActualApiError, NotFoundError, NotReadyError } from "../src/actual/errors.js";
-import type { Account, BudgetSummary, Transaction } from "../src/actual/types.js";
+import type { Account, BudgetMonth, BudgetSummary, Transaction } from "../src/actual/types.js";
 import { buildApp } from "../src/http/app.js";
 import { accountRoutes } from "../src/http/routes/accounts.js";
+import { budgetMonthRoutes } from "../src/http/routes/budget-months.js";
 import { budgetRoutes } from "../src/http/routes/budgets.js";
 import { categoryRoutes } from "../src/http/routes/categories.js";
 import { healthRoutes } from "../src/http/routes/health.js";
@@ -35,6 +36,39 @@ const transaction = {
   ...internal,
 } as Transaction;
 
+const month: BudgetMonth = {
+  month: "2026-09",
+  incomeAvailable: 1,
+  lastMonthOverspent: 0,
+  forNextMonth: 0,
+  totalBudgeted: -100,
+  toBudget: 0,
+  fromLastMonth: 0,
+  totalIncome: 0,
+  totalSpent: -50,
+  totalBalance: 50,
+  categoryGroups: [
+    {
+      id: "g1",
+      name: "Food",
+      is_income: false,
+      hidden: false,
+      budgeted: 100,
+      categories: [
+        { id: "c1", name: "Groceries", is_income: false, hidden: false, group_id: "g1", spent: -50, carryover: false },
+      ],
+    },
+    {
+      id: "g2",
+      name: "Income",
+      is_income: true,
+      hidden: false,
+      received: 2000,
+      categories: [{ id: "c2", name: "Salary", is_income: true, hidden: false, group_id: "g2", received: 2000 }],
+    },
+  ],
+};
+
 const notFound = () => Promise.reject(new NotFoundError("account not found"));
 
 let app: FastifyInstance;
@@ -63,6 +97,7 @@ function build(opts: { docs?: boolean; loaded?: BudgetSummary } = {}): FastifyIn
         groups: async () => [],
       }),
       payeeRoutes({ list: () => Promise.reject(new NotReadyError("no budget loaded")) }),
+      budgetMonthRoutes({ months: async () => ["2026-09"], month: async () => month }),
     ],
     { docs: opts.docs ?? true, version: "1.2.3" },
   );
@@ -85,6 +120,8 @@ describe("buildApp docs", () => {
       "/accounts/{id}",
       "/accounts/{id}/balance",
       "/accounts/{id}/transactions",
+      "/budget/months",
+      "/budget/{month}",
       "/budgets",
       "/categories",
       "/category-groups",
@@ -106,6 +143,7 @@ describe("buildApp docs", () => {
       "transactions",
       "categories",
       "payees",
+      "budget",
     ]);
   });
 
@@ -196,6 +234,17 @@ describe("read routes", () => {
     const res = await get("/payees");
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: "not ready" });
+  });
+
+  it("lists budget months and serves one month", async () => {
+    expect((await get("/budget/months")).json()).toEqual(["2026-09"]);
+    const res = await get("/budget/2026-09");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(month);
+  });
+
+  it.each(["2026-13", "2026-9", "202609"])("rejects month %j with 400", async (m) => {
+    expect((await get(`/budget/${m}`)).statusCode).toBe(400);
   });
 
   it.each(["start=2026-02-30", "end=2026-9-1", "start=yesterday"])("rejects transactions query %j with 400", async (q) => {
