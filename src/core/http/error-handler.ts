@@ -16,7 +16,8 @@ export function errorHandler(err: FastifyError, req: FastifyRequest, reply: Fast
     reply.code(status).send({ error: err.message });
     return;
   }
-  req.log.error(err);
+  // A non-Error goes under `rejection`: pino's err serializer would drop its fields.
+  req.log.error(err instanceof Error ? { err } : { rejection: err }, "request failed");
   reply.code(500).send({ error: "internal error" });
 }
 

@@ -31,7 +31,7 @@ function build(opts: { docs?: boolean } = {}): FastifyInstance {
       budgetMonthRoutes({ months: async () => ["2026-09"], month: async () => month }),
       idRoutes({ idByName: async () => "p1" }),
     ],
-    { docs: opts.docs ?? true, version: "1.2.3" },
+    { docs: opts.docs ?? true, version: "1.2.3", logger: false },
   );
   return app;
 }
