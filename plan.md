@@ -1,4 +1,4 @@
-# actual-api — Technical Plan
+# actual-http-api — Technical Plan
 
 Plan for a thin, long-running Node.js HTTP service ("the bridge") that wraps `@actual-app/api` and exposes an Actual Budget budget over HTTP+JSON to any client.
 

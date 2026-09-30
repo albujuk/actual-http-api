@@ -1,4 +1,4 @@
-# actual-api
+# actual-http-api
 
 A small, long-running HTTP server that exposes an [Actual Budget](https://actualbudget.org/) budget over HTTP + JSON.
 
@@ -6,10 +6,16 @@ Actual has no REST API. The only first-party programmatic interface is the Node.
 
 To the Actual server, this service looks like any other Actual client.
 
-```
-HTTP client ──HTTP+JSON──▶ actual-api (@actual-app/api, budget in memory) ──sync──▶ Actual server
-                                   │
-                                   └── DATA_DIR (local SQLite cache)
+```mermaid
+flowchart LR
+    client["HTTP client"]
+    bridge["actual-http-api<br/>(@actual-app/api, budget in memory)"]
+    server["Actual server"]
+    cache[("DATA_DIR<br/>local SQLite cache")]
+
+    client -- "HTTP + JSON" --> bridge
+    bridge <-- "sync" --> server
+    bridge --- cache
 ```
 
 ## Status
