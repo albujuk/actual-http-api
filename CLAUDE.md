@@ -19,7 +19,7 @@ Run `pnpm typecheck` and `pnpm test` after every change. No linter or formatter 
 ## Stack
 
 - Node 22.9+ (`engines`). ESM (`"type": "module"`), TypeScript 7 with `NodeNext` resolution, `verbatimModuleSyntax` and `noUncheckedIndexedAccess`. **Relative imports must use the `.js` extension** (`./types.js`), and type-only imports use `import type`.
-- Vitest for unit tests in `test/`.
+- Vitest. Tests sit next to the code as `*.test.ts` (excluded from the build); shared helpers live in `test/support/`.
 - Fastify 5, with pino logging via `logger: true`.
 - Route schemas in TypeBox (`typebox` 1.x, not `@sinclair/typebox`) via `@fastify/type-provider-typebox`. `@fastify/swagger` turns them into the OpenAPI 3.1 spec and `@fastify/swagger-ui` serves it.
 - `@actual-app/api` is pinned to an exact version. ActualQL and API details shift between releases, so re-check call signatures after an upgrade.
@@ -32,40 +32,45 @@ src/
   main.ts                  composition root: wires everything, start-up and shutdown order
   config.ts                loadConfig(env) -> typed Config; throws on missing or out-of-range vars
   lifecycle.ts             onShutdown(): runs once on SIGTERM/SIGINT or a fatal error, bounded by a timeout
-  actual/
-    types.ts               bridge-owned data types + narrow interfaces: Connection, BudgetLoader, BudgetCatalog,
-                           BudgetStatus, Syncable, AccountReader, TransactionReader, CategoryReader, PayeeReader,
-                           BudgetMonthReader, NameResolver
-    errors.ts              NotReadyError (503), NotFoundError (404), ActualApiError (unmapped library error, 500)
-    api-errors.ts          pure translateApiError() + callApi(): library APIError objects -> typed errors
-    guard.ts               requireLoaded(status): throws NotReadyError before the budget loads
+  app.test.ts              whole-app tests: OpenAPI spec covers every feature, docs toggle, 503/5xx mapping
+  core/                    shared infrastructure. Never imports from features/
     dates.ts               pure parseDay(): YYYY-MM-DD -> local-midnight Date
-    budget-month.ts        pure toBudgetMonth(): normalizes carryover cells to booleans
-    actual-connection.ts   ActualConnection: init/shutdown, list budgets, load one. One per process
-    budget-sync.ts         BudgetSync: Syncable capability, guarded by BudgetStatus
-    *-queries.ts           AccountQueries, TransactionQueries, CategoryQueries, PayeeQueries, BudgetMonthQueries:
-                           one read capability each, guarded by BudgetStatus, library calls wrapped in callApi
-    name-resolver.ts       ApiNameResolver: NameResolver over getIDByName
-    budget-selection.ts    pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
-  http/
-    app.ts                 buildApp(modules, options): creates Fastify, error handlers, docs, then each module's plugin. Knows no concrete route
-    route-module.ts        RouteModule { tag, plugin }: the abstraction app.ts and docs depend on
-    docs.ts                registerDocs(): @fastify/swagger + Swagger UI at /docs, tags from the modules. Registers before routes
-    schemas.ts             cross-cutting TypeBox schemas only (ErrorResponse, commonErrors, badRequest, notFound,
+    actual/
+      types.ts             connection-level types + interfaces: BudgetSummary, Connection, BudgetLoader,
+                           BudgetCatalog, BudgetStatus, Syncable
+      errors.ts            NotReadyError (503), NotFoundError (404), ActualApiError (unmapped library error, 500)
+      api-errors.ts        pure translateApiError() + callApi(): library APIError objects -> typed errors
+      guard.ts             requireLoaded(status): throws NotReadyError before the budget loads
+      actual-connection.ts ActualConnection: init/shutdown, list budgets, load one. One per process
+      budget-sync.ts       BudgetSync: Syncable capability, guarded by BudgetStatus
+      budget-selection.ts  pure toBudgetSummaries() + selectBudget() + BudgetSelectionError
+    http/
+      app.ts               buildApp(modules, options): creates Fastify, error handlers, docs, then each module's plugin. Knows no concrete route
+      route-module.ts      RouteModule { tag, plugin }: the abstraction app.ts and docs depend on
+      docs.ts              registerDocs(): @fastify/swagger + Swagger UI at /docs, tags from the modules. Registers before routes
+      schemas.ts           cross-cutting TypeBox schemas only (ErrorResponse, commonErrors, badRequest, notFound,
                            notReady, Id/IdParams, Day(description))
-    error-handler.ts       JSON { error } responses; 5xx never carry the raw message
-    routes/*.ts            each route file is a factory (deps) => RouteModule, owning its schemas and OpenAPI tag
-  sync/
-    periodic-sync.ts       PeriodicSync: chained setTimeout around a Syncable; implements SyncStatus
-test/                      Vitest unit tests for the pure logic and PeriodicSync, plus app.inject tests for routes and docs
+      error-handler.ts     JSON { error } responses; 5xx never carry the raw message
+    sync/
+      periodic-sync.ts     PeriodicSync: chained setTimeout around a Syncable; implements SyncStatus
+  features/<name>/         one folder per resource: accounts, transactions, categories, payees, budget-months,
+                           ids, budgets, health. Each holds what it has of:
+    <name>-types.ts        the feature's data types + its narrow reader interface (AccountReader, ...)
+    <name>-queries.ts      read capability class (AccountQueries, ...), guarded by BudgetStatus, library calls in callApi
+                           (ids: name-resolver.ts, ApiNameResolver over getIDByName)
+    <name>-routes.ts       factory (deps) => RouteModule, owning its TypeBox schemas and OpenAPI tag
+    budget-month.ts        (budget-months only) pure toBudgetMonth(): normalizes carryover cells to booleans
+    *.test.ts              the feature's tests, next to the code
+test/support/              shared test helpers only: fixtures + fakeStatus(), testApp(), describeLibraryCalls()
 ```
 
 Conventions to keep:
 
 - **Dependency injection through `main.ts` only.** Modules receive their collaborators and never import singletons. Only `main.ts` calls `loadConfig(process.env)`.
-- **Depend on the narrowest interface.** Routes and `PeriodicSync` take `BudgetStatus`, `BudgetCatalog` or `Syncable`, never `ActualConnection`. For a new capability, add an interface in `actual/types.ts` and implement it in a **new class** under `actual/` (like `BudgetSync`: it takes `BudgetStatus` and throws if no budget is loaded). Do not grow `ActualConnection`, which only owns connection and budget-load state. Inject the capability into a new route factory registered in `buildApp`.
-- **Keep `@actual-app/api` behind `actual/`.** The library is a process-wide singleton, so the `ActualConnection` constructor throws on a second instance. Budget selection policy lives in the composition root, not in `actual/`. Keep pure logic, such as `selectBudget`, in its own side-effect-free functions.
-- **Add a resource as a new `routes/<name>.ts` returning a `RouteModule`**, and add it to the `buildApp([...])` list in `main.ts`. Nothing else changes: `app.ts`, `docs.ts` and `schemas.ts` stay untouched. The module keeps its TypeBox schemas and its tag in its own file; only schemas used by several modules go in `schemas.ts`.
+- **Depend on the narrowest interface.** Routes and `PeriodicSync` take `BudgetStatus`, `BudgetCatalog` or `Syncable`, never `ActualConnection`. For a new capability, add an interface in the feature's `<name>-types.ts` and implement it in a **new class** in that feature folder (like `AccountQueries`: it takes `BudgetStatus` and throws if no budget is loaded). Connection-level capabilities (like `BudgetSync`) go in `core/actual/`. Do not grow `ActualConnection`, which only owns connection and budget-load state. Inject the capability into a new route factory registered in `buildApp`.
+- **Import `@actual-app/api` only in `core/actual/` and in a feature's capability classes** (`*-queries.ts`, `name-resolver.ts`, later `*-writer.ts`). Route files never import it. The library is a process-wide singleton, so the `ActualConnection` constructor throws on a second instance. Budget selection policy lives in the composition root, not in `core/actual/`. Keep pure logic, such as `selectBudget`, in its own side-effect-free functions.
+- **Add a resource as a new `features/<name>/` folder** with its types, capability class, `<name>-routes.ts` returning a `RouteModule`, and tests. Add the module to the `buildApp([...])` list in `main.ts` and its path and tag to the spec test in `src/app.test.ts`. Nothing in `core/` changes: `app.ts`, `docs.ts` and `schemas.ts` stay untouched. The module keeps its TypeBox schemas and its tag in its own file; only schemas used by several modules go in `schemas.ts`.
+- **Dependency direction: features import `core/`, `core/` never imports a feature.** Between features only `import type` is allowed (transactions uses `AccountReader`, budget-months uses `Category`). All runtime wiring stays in `main.ts`. No `index.ts` barrels: import modules directly.
 - **Every route declares a TypeBox `schema`** with `tags: [tag.name]`, `summary`, and a `response` entry for each status it can send, spreading `commonErrors`. Undeclared response fields are dropped by serialization.
 - Private state uses `#fields`. Timers and errors go through injected `onError` callbacks, which wire to `app.log`.
 
@@ -110,7 +115,7 @@ Each rule guards against a bug class found in review. Follow them in every chang
 - **Parse env vars only through the `config.ts` helpers.** Never write `Number(x) || default`: it accepts negatives, and it silently turns `NaN` and `0` into the default. Every number gets an explicit integer range. Keep timer delays within 1..2_147_483_647, because Node turns anything outside that range into 1ms.
 - **No `setInterval` around async work.** Schedule the next run with `setTimeout` after the previous one settles. Every background task keeps its in-flight promise, and its `stop()` awaits that promise.
 - **Shutdown awaits all in-flight work before `connection.close()`.** That covers start-up steps, syncs and, later, writes behind the mutex. Start-up checks the abort signal between steps. Every exit goes through `lifecycle.ts` and stays bounded by the timeout. Don't call `process.exit` anywhere else, except for config and start-up failures in `main.ts`.
-- **Never send a raw `err.message` in a 5xx response.** Throw typed errors and let `http/error-handler.ts` map them. A capability used before the connection or budget is ready throws `NotReadyError` (503), never a plain `Error`. New error types get a mapping there.
+- **Never send a raw `err.message` in a 5xx response.** Throw typed errors and let `core/http/error-handler.ts` map them. A capability used before the connection or budget is ready throws `NotReadyError` (503), never a plain `Error`. New error types get a mapping there.
 - **Custom error classes set `this.name`.**
 - **Wrap every `@actual-app/api` call in `callApi`.** The library rejects with plain objects, not `Error`s, so an unwrapped call reaches Fastify as a non-Error. Known messages map to `NotFoundError`; the rest become `ActualApiError` (500).
 - **Check existence where the library fails silently.** An unknown account id gives balance `0` and transactions `[]`, so readers call `AccountReader.get()` first to return 404.
@@ -119,7 +124,7 @@ Each rule guards against a bug class found in review. Follow them in every chang
 - **Keep docs in sync in the same change.** A new or changed env var, default, endpoint, response shape, error format or roadmap stage updates `.env.example`, README.md, CLAUDE.md and plan.md together. Defaults in `.env.example` and in the docs match the code.
 - **`engines.node` must cover every Node flag and API** used in scripts and code (`--env-file-if-exists` needs 22.9).
 - **Don't use the non-null `!` to satisfy `noUncheckedIndexedAccess` in `src/`.** Destructure or check instead. `!` is fine in tests.
-- **Pure logic lives in side-effect-free functions with a Vitest test.** Examples: selection, parsing, and mapping API results (`toBudgetSummaries`). Anything with timers is tested with fake timers.
+- **Pure logic lives in side-effect-free functions with a Vitest test next to it.** Examples: selection, parsing, and mapping API results (`toBudgetSummaries`). Anything with timers is tested with fake timers.
 - **Check `@actual-app/api` behavior in `node_modules/@actual-app/api/dist/index.js`, not from memory.** Known facts for 26.9.0:
   - `getBudgets()` returns local cache folders (no `state`) plus remote files (`state: "remote"`, deleted files excluded).
   - `shutdown()` syncs but swallows errors.
